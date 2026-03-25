@@ -10,9 +10,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-
 DEFAULT_GENOME = "/scratch/prj/ppn_rnp_networks/shared/references/genomes/homo_sapiens/GRCh38.p14-GencodeRelease44/hg38.genome"
-
 
 def parse_args():
     p = argparse.ArgumentParser(description="Intersect decoys with multiple crosslink types and summarize")
@@ -29,7 +27,7 @@ def parse_args():
         help="Decoy BED (must have at least 6 columns; strand in column 6).",
     )
     p.add_argument("--window", type=int, default=50, help="Half-window size in bp around each decoy")
-    p.add_argument("--min-sum", type=float, default=25, help="Minimum summed signal threshold")
+    p.add_argument("--min-sum", type=float, default=5, help="Minimum summed signal threshold")
     p.add_argument("--genome", default=DEFAULT_GENOME, help="Genome sizes file for bedtools slop")
     p.add_argument(
         "--table",
@@ -214,11 +212,12 @@ def compute_summary_stats(counts: np.ndarray, window: int, min_sum: float):
     counts shape: (n_decoys, L)
 
     Returns arrays:
-      totals, pearson_median_skew, kurtosis_excess, max_binding_offset
+      totals, variance, pearson_median_skew, kurtosis_excess, max_binding_offset
     """
     totals = counts.sum(axis=1)
     mean = counts.mean(axis=1)
     median = np.median(counts, axis=1)
+    variance = counts.var(axis=1)
     std = counts.std(axis=1)
 
     pearson_median_skew = np.zeros(counts.shape[0], dtype=np.float64)
@@ -248,7 +247,7 @@ def compute_summary_stats(counts: np.ndarray, window: int, min_sum: float):
     # For fully-zero decoys, define max offset as 0 for interpretability.
     max_binding_offset[totals == 0] = 0
 
-    return totals, pearson_median_skew, kurtosis_excess, max_binding_offset
+    return totals, variance, pearson_median_skew, kurtosis_excess, max_binding_offset
 
 
 def smooth_metaprofile(meta_counts: np.ndarray, smooth_window: int = 5) -> np.ndarray:
@@ -290,6 +289,7 @@ def main():
 
         # For table output: store metrics per protein.
         totals_by_protein = {}
+        variance_by_protein = {}
         skew_by_protein = {}
         kurt_by_protein = {}
         maxoff_by_protein = {}
@@ -305,13 +305,14 @@ def main():
                 n_decoys=n_decoys,
             )
 
-            totals, pearson_median_skew, kurtosis_excess, max_binding_offset = compute_summary_stats(
+            totals, variance, pearson_median_skew, kurtosis_excess, max_binding_offset = compute_summary_stats(
                 counts=counts,
                 window=args.window,
                 min_sum=args.min_sum,
             )
 
             totals_by_protein[protein_name] = totals
+            variance_by_protein[protein_name] = variance
             skew_by_protein[protein_name] = pearson_median_skew
             kurt_by_protein[protein_name] = kurtosis_excess
             maxoff_by_protein[protein_name] = max_binding_offset
@@ -340,6 +341,7 @@ def main():
                 header.extend(
                     [
                         f"{protein_name}_total_overlaps",
+                        f"{protein_name}_variance",
                         f"{protein_name}_pearson_median_skew",
                         f"{protein_name}_kurtosis_excess",
                         f"{protein_name}_max_binding_offset",
@@ -352,6 +354,7 @@ def main():
                     row = [decoy_keys[i]]
                     for protein_name in protein_names:
                         row.append(f"{totals_by_protein[protein_name][i]:.6g}")
+                        row.append(f"{variance_by_protein[protein_name][i]:.6g}")
                         row.append(f"{skew_by_protein[protein_name][i]:.6g}")
                         row.append(f"{kurt_by_protein[protein_name][i]:.6g}")
                         row.append(str(int(maxoff_by_protein[protein_name][i])))

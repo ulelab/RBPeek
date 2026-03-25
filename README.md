@@ -1,6 +1,5 @@
 # RBPeek
 merge crosslinks files and intersect with BED for broad binding analysis and metaprofiling
-
 # `intersect_decoy.py`
 
 Summarize CLIP/iCLIP/eCLIP-style **crosslink (XL) signal** around **decoy splice-site loci** across *multiple proteins*, producing:
@@ -121,8 +120,9 @@ Enabled by `--table`.
 File: `<outdir>/decoy_summary.tsv`
 
 - **Column 1**: `decoy_chr_start_end` formatted as `chr_start_end`
-- For each protein, four columns are added:
+- For each protein, five columns are added:
   - `<protein>_total_overlaps`
+  - `<protein>_variance`
   - `<protein>_pearson_median_skew`
   - `<protein>_kurtosis_excess`
   - `<protein>_max_binding_offset`
@@ -130,6 +130,7 @@ File: `<outdir>/decoy_summary.tsv`
 These metrics are computed from the per-decoy vector across \(-window..+window\):
 
 - **total_overlaps**: \(\sum\) of XL scores across the full vector.
+- **variance**: variance of XL scores across the full vector (\(-window..+window\)).
 - **pearson_median_skew**: Pearson’s *median* skewness
 
   \[
