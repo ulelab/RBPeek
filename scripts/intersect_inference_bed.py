@@ -13,7 +13,7 @@ import numpy as np
 DEFAULT_GENOME = "/scratch/prj/ppn_rnp_networks/shared/references/genomes/homo_sapiens/GRCh38.p14-GencodeRelease44/hg38.genome"
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Intersect decoys with multiple crosslink types and summarize")
+    p = argparse.ArgumentParser(description="Intersect inference BED with multiple crosslink types and summarize")
     p.add_argument(
         "-x",
         "--xldir",
@@ -21,18 +21,18 @@ def parse_args():
         help="Directory containing a subdirectory per protein (e.g. PRPF8/). If no subdirectories match, xldir itself is treated as one protein.",
     )
     p.add_argument(
-        "-d",
-        "--decoys",
+        "-b",
+        "--bed",
         required=True,
-        help="Decoy BED (must have at least 6 columns; strand in column 6).",
+        help="Inference BED (must have at least 6 columns; strand in column 6).",
     )
-    p.add_argument("--window", type=int, default=50, help="Half-window size in bp around each decoy")
-    p.add_argument("--min-sum", type=float, default=5, help="Minimum summed signal threshold")
+    p.add_argument("--window", type=int, default=50, help="Half-window size in bp around each inference locus")
+    p.add_argument("--gaussian-sigma", type=float, default=2.0, help="Gaussian smoothing sigma for metaprofile")
     p.add_argument("--genome", default=DEFAULT_GENOME, help="Genome sizes file for bedtools slop")
     p.add_argument(
         "--table",
         action="store_true",
-        help="If set, write per-decoy summary TSV (always computed for all decoys; metaprofile uses filtering).",
+        help="If set, write per-locus summary TSV.",
     )
     p.add_argument(
         "-o",
@@ -68,7 +68,8 @@ def list_protein_dirs(xldir: Path) -> list[Path]:
 def merge_protein_crosslinks(protein_dir: Path, merged_dir: Path) -> Path:
     """
     Merge all *genome.xl.bed files in a protein directory into a single BED6:
-      chr start end . sumScore strand
+      chr start end . fileSupport strand
+    fileSupport = number of distinct XL files where the exact site+strand occurs.
     Chromosomes are normalized to chr-prefixed naming.
     """
     genome_xl = sorted(protein_dir.glob("*genome.xl.bed"))
@@ -79,11 +80,14 @@ def merge_protein_crosslinks(protein_dir: Path, merged_dir: Path) -> Path:
     protein_name = protein_dir.name
     out_path = merged_dir / f"{protein_name}_merged.bed"
 
-    # Important: bedtools groupby requires sorted input by group keys.
+    # Tag each XL record with its source filename, then group by genomic site+strand
+    # and count distinct source files (binary support across files).
     merge_cmd = (
-        "cat *.genome.xl.bed | "
-        "sort -k1,1 -k2,2n -k3,3n -k6,6 | "
-        "bedtools groupby -i stdin -g 1,2,3,6 -c 5 -o sum | "
+        "for f in *.genome.xl.bed; do "
+        "awk -v OFS='\\t' -v sid=\"$f\" '{print $1,$2,$3,$4,$5,$6,sid}' \"$f\"; "
+        "done | "
+        "sort -k1,1 -k2,2n -k3,3n -k6,6 -k7,7 | "
+        "bedtools groupby -i stdin -g 1,2,3,6 -c 7 -o count_distinct | "
         "awk 'BEGIN{OFS=\"\\t\"} "
         "{chrom=$1; if (chrom !~ /^chr/) chrom=\"chr\" chrom; print chrom, $2, $3, \".\", $5, $4}' "
         f"> \"{out_path}\""
@@ -92,73 +96,73 @@ def merge_protein_crosslinks(protein_dir: Path, merged_dir: Path) -> Path:
     return out_path
 
 
-def load_decoys_and_prepare_windows(decoys_path: Path, window: int, genome: str, tmpdir: Path):
+def load_binf_and_prepare_windows(binf_path: Path, window: int, genome: str, tmpdir: Path):
     """
     Writes:
-      - decoys_site.bed: original decoys with extra columns containing decoy site start/end
-      - decoys_windows.bed: bedtools slop output of decoys_site.bed (slopped intervals kept with extra columns)
+      - binf_site.bed: inference BED with extra columns containing site start/end
+      - binf_windows.bed: bedtools slop output of binf_site.bed (slopped intervals kept with extra columns)
 
     Returns:
-      decoy_keys: list of chr_start_end strings in stable file order
-      decoy_index: dict mapping (chr, start, end) -> row index
-      decoys_windows_path: path to slopped decoys BED
+      binf_keys: list of chr_start_end strings in stable file order
+      binf_index: dict mapping (chr, start, end) -> list of row indices (duplicates allowed)
+      binf_windows_path: path to slopped inference BED
     """
-    decoys_site = tmpdir / "decoys_site.bed"
-    decoys_windows = tmpdir / "decoys_windows.bed"
+    binf_site = tmpdir / "binf_site.bed"
+    binf_windows = tmpdir / "binf_windows.bed"
 
-    decoy_keys: list[str] = []
-    # Allows duplicate decoy loci (same chr/start/end can appear multiple times).
-    # Maps (chr, start, end) -> list of decoy row indices that share these coordinates.
-    decoy_index: dict[tuple[str, int, int], list[int]] = {}
-    decoy_idx = 0
+    binf_keys: list[str] = []
+    # Allows duplicate loci (same chr/start/end can appear multiple times).
+    # Maps (chr, start, end) -> list of row indices that share these coordinates.
+    binf_index: dict[tuple[str, int, int], list[int]] = {}
+    binf_idx = 0
 
-    with open(decoys_path, "r", encoding="utf-8") as fin, open(decoys_site, "w", encoding="utf-8") as fout:
+    with open(binf_path, "r", encoding="utf-8") as fin, open(binf_site, "w", encoding="utf-8") as fout:
         for line in fin:
             if not line.strip():
                 continue
             cols = line.rstrip("\n").split("\t")
             if len(cols) < 6:
-                raise ValueError(f"Decoy BED has <6 columns: {line[:120]}")
+                raise ValueError(f"Inference BED has <6 columns: {line[:120]}")
             chrom = cols[0]
             start = int(cols[1])
             end = int(cols[2])
             strand = cols[5]
             # columns 4-5 are preserved (name and spliceAI score), plus we add site start/end
             key = f"{chrom}_{start}_{end}"
-            decoy_keys.append(key)
-            decoy_index.setdefault((chrom, start, end), []).append(decoy_idx)
+            binf_keys.append(key)
+            binf_index.setdefault((chrom, start, end), []).append(binf_idx)
             # Ensure strand stays in column 6.
             fout.write("\t".join([chrom, str(start), str(end), cols[3], cols[4], strand, str(start), str(end)]) + "\n")
-            decoy_idx += 1
+            binf_idx += 1
 
     subprocess.run(
-        ["bedtools", "slop", "-i", str(decoys_site), "-g", genome, "-b", str(window)],
-        stdout=open(decoys_windows, "w", encoding="utf-8"),
+        ["bedtools", "slop", "-i", str(binf_site), "-g", genome, "-b", str(window)],
+        stdout=open(binf_windows, "w", encoding="utf-8"),
         check=True,
     )
 
-    return decoy_keys, decoy_index, decoys_windows
+    return binf_keys, binf_index, binf_windows
 
 
 def compute_counts_for_protein(
     merged_xl_bed: Path,
-    decoys_windows_bed: Path,
-    decoy_index: dict[tuple[str, int, int], list[int]],
+    binf_windows_bed: Path,
+    binf_index: dict[tuple[str, int, int], list[int]],
     window: int,
-    n_decoys: int,
+    n_binf: int,
 ):
     """
-    Build a matrix counts[decoy_idx, offset_bin] where:
+    Build a matrix counts[binf_idx, offset_bin] where:
       offset_bin corresponds to offset in [-window..+window]
       value = summed crosslink score (merged_xl column 5) at xl_start for that offset
-    Uses strand-aware overlaps (-s) and assigns offsets with decoy strand flipped so that offsets always match the decoy's 5'->3' direction.
+    Uses strand-aware overlaps (-s) and assigns offsets with strand flipped so that offsets always match the inference BED's 5'->3' direction.
     """
     L = 2 * window + 1
-    counts = np.zeros((n_decoys, L), dtype=np.float32)
+    counts = np.zeros((n_binf, L), dtype=np.float32)
 
     # intersect output columns:
     # merged_xl: 6 columns
-    # decoy_windows: 8 columns (chr,start,end,name,score,strand,site_start,site_end)
+    # binf_windows: 8 columns (chr,start,end,name,score,strand,site_start,site_end)
     # plus overlap length (-wo)
     cmd = [
         "bedtools",
@@ -166,7 +170,7 @@ def compute_counts_for_protein(
         "-a",
         str(merged_xl_bed),
         "-b",
-        str(decoys_windows_bed),
+        str(binf_windows_bed),
         "-s",
         "-wo",
     ]
@@ -182,17 +186,17 @@ def compute_counts_for_protein(
 
         xl_start = int(cols[1])
         xl_score = float(cols[4])
-        decoy_chr = cols[6]
-        decoy_strand = cols[11]
-        decoy_site_start = int(cols[12])
-        decoy_site_end = int(cols[13])
-        idx_list = decoy_index.get((decoy_chr, decoy_site_start, decoy_site_end))
+        binf_chr = cols[6]
+        binf_strand = cols[11]
+        binf_site_start = int(cols[12])
+        binf_site_end = int(cols[13])
+        idx_list = binf_index.get((binf_chr, binf_site_start, binf_site_end))
         if not idx_list:
             # Chromosome naming mismatch should not happen, but skip if it does.
             continue
 
-        offset = xl_start - decoy_site_start
-        if decoy_strand == "-":
+        offset = xl_start - binf_site_start
+        if binf_strand == "-":
             offset = -offset
 
         if -window <= offset <= window:
@@ -207,9 +211,9 @@ def compute_counts_for_protein(
     return counts
 
 
-def compute_summary_stats(counts: np.ndarray, window: int, min_sum: float):
+def compute_summary_stats(counts: np.ndarray, window: int):
     """
-    counts shape: (n_decoys, L)
+    counts shape: (n_binf, L)
 
     Returns arrays:
       totals, variance, pearson_median_skew, kurtosis_excess, max_binding_offset
@@ -237,22 +241,25 @@ def compute_summary_stats(counts: np.ndarray, window: int, min_sum: float):
     if L < 5:
         max_binding_offset = np.zeros(counts.shape[0], dtype=np.int64)
     else:
-        # sliding_window_view returns view shape (n_decoys, L-4, 5)
+        # sliding_window_view returns view shape (n_binf, L-4, 5)
         windows = np.lib.stride_tricks.sliding_window_view(counts, 5, axis=1)
-        window_sums = windows.sum(axis=2)  # (n_decoys, L-4)
+        window_sums = windows.sum(axis=2)  # (n_binf, L-4)
         start_idx = np.argmax(window_sums, axis=1)  # 0..(L-5)
         max_binding_offset = (start_idx + 2) - window
 
     max_binding_offset = max_binding_offset.astype(np.int64)
-    # For fully-zero decoys, define max offset as 0 for interpretability.
+    # For fully-zero loci, define max offset as 0 for interpretability.
     max_binding_offset[totals == 0] = 0
 
     return totals, variance, pearson_median_skew, kurtosis_excess, max_binding_offset
 
 
-def smooth_metaprofile(meta_counts: np.ndarray, smooth_window: int = 5) -> np.ndarray:
-    kernel = np.ones(smooth_window, dtype=np.float64)
-    # centered rolling sum; 'same' keeps length.
+def smooth_metaprofile_gaussian(meta_counts: np.ndarray, sigma: float = 2.0) -> np.ndarray:
+    # Build a normalized Gaussian kernel and convolve with 'same' length output.
+    radius = max(1, int(round(4.0 * sigma)))
+    x = np.arange(-radius, radius + 1, dtype=np.float64)
+    kernel = np.exp(-0.5 * (x / sigma) ** 2)
+    kernel /= kernel.sum()
     return np.convolve(meta_counts, kernel, mode="same")
 
 
@@ -260,9 +267,9 @@ def main():
     args = parse_args()
 
     xldir = Path(args.xldir)
-    decoys_path = Path(args.decoys)
-    if not decoys_path.exists():
-        raise FileNotFoundError(f"Decoys BED not found: {decoys_path}")
+    binf_path = Path(args.bed)
+    if not binf_path.exists():
+        raise FileNotFoundError(f"Inference BED not found: {binf_path}")
     if not Path(args.genome).exists():
         raise FileNotFoundError(f"Genome sizes file not found: {args.genome}")
 
@@ -274,16 +281,16 @@ def main():
     protein_dirs = list_protein_dirs(xldir)
     protein_names = [p.name for p in protein_dirs]
 
-    with tempfile.TemporaryDirectory(prefix="intersect_decoy_") as tmp:
+    with tempfile.TemporaryDirectory(prefix="intersect_binf_") as tmp:
         tmpdir = Path(tmp)
-        decoy_keys, decoy_index, decoys_windows_bed = load_decoys_and_prepare_windows(
-            decoys_path=decoys_path,
+        binf_keys, binf_index, binf_windows_bed = load_binf_and_prepare_windows(
+            binf_path=binf_path,
             window=args.window,
             genome=args.genome,
             tmpdir=tmpdir,
         )
 
-        n_decoys = len(decoy_keys)
+        n_binf = len(binf_keys)
         L = 2 * args.window + 1
         offsets = np.arange(-args.window, args.window + 1, dtype=np.int64)
 
@@ -299,16 +306,15 @@ def main():
             merged_xl_bed = merge_protein_crosslinks(protein_dir, merged_dir=merged_dir)
             counts = compute_counts_for_protein(
                 merged_xl_bed=merged_xl_bed,
-                decoys_windows_bed=decoys_windows_bed,
-                decoy_index=decoy_index,
+                binf_windows_bed=binf_windows_bed,
+                binf_index=binf_index,
                 window=args.window,
-                n_decoys=n_decoys,
+                n_binf=n_binf,
             )
 
             totals, variance, pearson_median_skew, kurtosis_excess, max_binding_offset = compute_summary_stats(
                 counts=counts,
                 window=args.window,
-                min_sum=args.min_sum,
             )
 
             totals_by_protein[protein_name] = totals
@@ -317,15 +323,13 @@ def main():
             kurt_by_protein[protein_name] = kurtosis_excess
             maxoff_by_protein[protein_name] = max_binding_offset
 
-            # Metaprofile uses filtering: include only decoys with totals >= min_sum.
-            mask_keep = totals >= args.min_sum
-            meta_counts = counts[mask_keep, :].sum(axis=0) if np.any(mask_keep) else np.zeros(L, dtype=np.float64)
-            smoothed = smooth_metaprofile(meta_counts, smooth_window=5)
+            meta_counts = counts.sum(axis=0)
+            smoothed = smooth_metaprofile_gaussian(meta_counts, sigma=args.gaussian_sigma)
             plt.plot(offsets, smoothed, label=protein_name, linewidth=2)
 
         plt.axvline(0, color="black", linewidth=1, alpha=0.4)
-        plt.xlabel("Relative nucleotide position around decoy (nt)")
-        plt.ylabel("Crosslinks (smoothed sum over 5 nt)")
+        plt.xlabel("Relative nucleotide position around inference locus (nt)")
+        plt.ylabel("Crosslink file-support signal (Gaussian smoothed)")
         plt.xlim(-args.window, args.window)
         plt.legend(frameon=False)
         plt.tight_layout()
@@ -335,8 +339,8 @@ def main():
         print(f"Wrote metaprofile plot to: {plot_path}")
 
         if args.table:
-            tsv_path = outdir / "decoy_summary.tsv"
-            header = ["decoy_chr_start_end"]
+            tsv_path = outdir / "binf_summary.tsv"
+            header = ["binf_chr_start_end"]
             for protein_name in protein_names:
                 header.extend(
                     [
@@ -350,8 +354,8 @@ def main():
 
             with open(tsv_path, "w", encoding="utf-8") as fout:
                 fout.write("\t".join(header) + "\n")
-                for i in range(n_decoys):
-                    row = [decoy_keys[i]]
+                for i in range(n_binf):
+                    row = [binf_keys[i]]
                     for protein_name in protein_names:
                         row.append(f"{totals_by_protein[protein_name][i]:.6g}")
                         row.append(f"{variance_by_protein[protein_name][i]:.6g}")
@@ -360,7 +364,7 @@ def main():
                         row.append(str(int(maxoff_by_protein[protein_name][i])))
                     fout.write("\t".join(row) + "\n")
 
-            print(f"Wrote decoy summary table to: {tsv_path}")
+            print(f"Wrote binf summary table to: {tsv_path}")
 
 
 if __name__ == "__main__":
