@@ -1,13 +1,12 @@
-# RBPeek
-Merge crosslinks files and intersect with BED for broad binding analysis and metaprofiling
-
-# `intersect_inference_bed.py`
+# `intersect_decoy.py`
 
 Summarize CLIP/iCLIP/eCLIP-style **crosslink (xl) support** around loci from an **inference BED** across *multiple proteins*, producing:
 
-- a **metaprofile plot** (primary output): Gaussian-smoothed aggregate xl file-support signal from \(-window..+window\)
+- a **metaprofile plot** (primary output): Gaussian-smoothed **mean** XL file-support signal from \(-window:+window\) (top 10 proteins only)
 - an **optional per-locus summary table** (TSV): per-locus signal shape metrics for each protein
-- **per-protein merged xl BEDs** written under `<xldir>/merged/`
+- **per-protein merged XL BEDs** written under `<xldir>/merged/`
+- a **clustered heatmap** across all proteins (`binf` rows x proteins columns; values = per-locus total support)
+- an optional **single-protein nucleotide heatmap** (`binf` rows x nt columns) via `-i/--inspect-protein`
 
 ## Inputs
 
@@ -57,11 +56,12 @@ Created by using samtools faidx or cut -f1,2 on reference genome fasta index fil
 ## CLI
 
 ```bash
-python3 intronretention/hnRNPH1_IR_MAF/scripts/intersect_inference_bed.py \
+python3 intronretention/hnRNPH1_IR_MAF/scripts/intersect_decoy.py \
   -x <xldir> \
   -b <inference.bed> \
   --window 50 \
   --gaussian-sigma 2.0 \
+  -i PRPF8 \
   --table \
   -o results/
 ```
@@ -72,6 +72,7 @@ python3 intronretention/hnRNPH1_IR_MAF/scripts/intersect_inference_bed.py \
 - **`-b/--bed`**: inference BED (required)
 - **`--window`**: half-window size (default 50). Output offsets run from \(-window..+window\).
 - **`--gaussian-sigma`**: sigma parameter for Gaussian metaprofile smoothing (default 2.0)
+- **`-i/--inspect-protein`**: optional protein name for an extra per-nucleotide heatmap for that protein
 - **`--table`**: if set, write the per-locus summary TSV
 - **`-o/--outdir`**: directory for plot + TSV (default `results/` in the current working directory)
 
@@ -83,7 +84,7 @@ For each protein directory, all `*genome.xl.bed` files are merged by exact locus
 Each site is tagged by source filename, then grouped so the merged score becomes:
 
 - group key: `(chrom, start, end, strand)`
-- aggregation: `count_distinct(file)` (number of XL files containing that exact site+strand)
+- aggregation: `count_distinct(file)` (number of xl files containing that exact site+strand)
 
 Output:
 
@@ -95,7 +96,7 @@ Chromosome names are normalized to `chr*` (e.g. `1` → `chr1`) to match typical
 
 ### 2) Build per-locus signal vectors
 
-Each inference locus is expanded by `--window` (bedtools slop). The script intersects merged XL sites with these windows **strand-aware** (`bedtools intersect -s`).
+Each inference locus is expanded by `--window` (bedtools slop). The script intersects merged xl sites with these windows **strand-aware** (`bedtools intersect -s`).
 
 For each locus, it builds a vector of length \(2*window+1\), where each position stores the **summed file-support score** at that relative offset.
 
@@ -113,9 +114,34 @@ File: `<outdir>/metaprofile.png`
 For each protein:
 
 - compute `total_overlaps = sum(vector)` for each locus
-- sum support vectors across all loci to get the aggregate profile
+- compute the **mean** support vector across all loci (average by number of input `binf` regions)
 - smooth with a **Gaussian kernel** controlled by `--gaussian-sigma`
-- plot all proteins as separate curves on the same axes
+- rank proteins by total smoothed metaprofile signal and plot only the **top 10**
+- place legend on the right side of the figure
+
+### Clustered heatmap (always)
+
+File: `<outdir>/binf_support_heatmap.png`
+
+- rows: `binf` loci
+- columns: proteins
+- values: per-locus total support (`total_overlaps`)
+- pre-filter rows: keep loci with `sum(total_overlaps across proteins) >= 10`
+- transform values with logistic scaling for visualization:
+  - `scaled = 1 / (1 + exp(-z))`, where `z` is robust centered/scaled signal
+- hierarchical clustering: rows and columns (row clustering is done after filtering)
+
+### Single-protein nucleotide heatmap (optional)
+
+Enabled by `-i/--inspect-protein`.
+
+File: `<outdir>/binf_<protein>_nt_support_heatmap.png`
+
+- rows: `binf` loci
+- columns: nucleotide positions from `-window..+window`
+- values: merged support score at each relative nucleotide offset for the selected protein
+- pre-filter rows: keep loci with `sum(across nt positions) >= 5` for the selected protein
+- hierarchical clustering: rows and columns (row clustering is done after filtering)
 
 ### Summary table (optional)
 
@@ -133,8 +159,8 @@ File: `<outdir>/binf_summary.tsv`
 
 These metrics are computed from the per-locus vector across \(-window..+window\):
 
-- **total_overlaps**: \(\sum\) of XL scores across the full vector
-- **variance**: variance of XL scores across the full vector
+- **total_overlaps**: \(\sum\) of xl scores across the full vector
+- **variance**: variance of xl scores across the full vector
 - **pearson_median_skew**: Pearson’s median skewness
 
   \[
@@ -143,7 +169,7 @@ These metrics are computed from the per-locus vector across \(-window..+window\)
 
   (defined as 0 when `std == 0`).
 
-- **kurtosis_excess**: Fisher excess kurtosis
+- **kurtosis_excess**: Fisher excess kurtosis; Positive values indicate leptokurtic distribution with strong tailedness while negative values are strongly platykurtic
 
   \[
   \frac{\mu_4}{\sigma^4} - 3
@@ -158,4 +184,5 @@ These metrics are computed from the per-locus vector across \(-window..+window\)
 
 - Input coordinates can repeat (duplicate `chr/start/end`); the script keeps **one row per input BED line** and handles duplicates during intersection.
 - Runtime is dominated by the `bedtools groupby` merge and `bedtools intersect` steps for large XL datasets.
+- `-i/--inspect-protein` must match a protein directory name under `--xldir`.
 

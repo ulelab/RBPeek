@@ -9,6 +9,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+import seaborn as sns
 
 DEFAULT_GENOME = "/scratch/prj/ppn_rnp_networks/shared/references/genomes/homo_sapiens/GRCh38.p14-GencodeRelease44/hg38.genome"
 
@@ -28,6 +29,12 @@ def parse_args():
     )
     p.add_argument("--window", type=int, default=50, help="Half-window size in bp around each inference locus")
     p.add_argument("--gaussian-sigma", type=float, default=2.0, help="Gaussian smoothing sigma for metaprofile")
+    p.add_argument(
+        "-i",
+        "--inspect-protein",
+        default=None,
+        help="Optional protein name to generate per-nucleotide binf heatmap (rows=binf, cols=-window..+window).",
+    )
     p.add_argument("--genome", default=DEFAULT_GENOME, help="Genome sizes file for bedtools slop")
     p.add_argument(
         "--table",
@@ -79,6 +86,9 @@ def merge_protein_crosslinks(protein_dir: Path, merged_dir: Path) -> Path:
     merged_dir.mkdir(parents=True, exist_ok=True)
     protein_name = protein_dir.name
     out_path = merged_dir / f"{protein_name}_merged.bed"
+    if out_path.exists() and out_path.stat().st_size > 0:
+        print(f"Using existing merged BED for {protein_name}: {out_path}")
+        return out_path
 
     # Tag each XL record with its source filename, then group by genomic site+strand
     # and count distinct source files (binary support across files).
@@ -263,6 +273,16 @@ def smooth_metaprofile_gaussian(meta_counts: np.ndarray, sigma: float = 2.0) -> 
     return np.convolve(meta_counts, kernel, mode="same")
 
 
+def logistic_scale(matrix: np.ndarray) -> np.ndarray:
+    # Logistic scaling after robust centering/scaling to compress large dynamic range.
+    center = float(np.median(matrix))
+    spread = float(np.std(matrix))
+    if spread <= 0:
+        spread = 1.0
+    z = (matrix - center) / spread
+    return 1.0 / (1.0 + np.exp(-z))
+
+
 def main():
     args = parse_args()
 
@@ -300,8 +320,12 @@ def main():
         skew_by_protein = {}
         kurt_by_protein = {}
         maxoff_by_protein = {}
+        inspect_counts_matrix = None
 
-        plt.figure(figsize=(10, 4.5))
+        meta_profiles = {}
+        meta_profile_scores = {}
+
+        plt.figure(figsize=(11, 4.5))
         for protein_dir, protein_name in zip(protein_dirs, protein_names):
             merged_xl_bed = merge_protein_crosslinks(protein_dir, merged_dir=merged_dir)
             counts = compute_counts_for_protein(
@@ -322,21 +346,92 @@ def main():
             skew_by_protein[protein_name] = pearson_median_skew
             kurt_by_protein[protein_name] = kurtosis_excess
             maxoff_by_protein[protein_name] = max_binding_offset
+            if args.inspect_protein == protein_name:
+                inspect_counts_matrix = counts.copy()
 
-            meta_counts = counts.sum(axis=0)
+            # Average support profile across all input binf regions.
+            meta_counts = counts.mean(axis=0)
             smoothed = smooth_metaprofile_gaussian(meta_counts, sigma=args.gaussian_sigma)
-            plt.plot(offsets, smoothed, label=protein_name, linewidth=2)
+            meta_profiles[protein_name] = smoothed
+            # Rank proteins by total metaprofile signal and plot top 10 only.
+            meta_profile_scores[protein_name] = float(np.sum(smoothed))
+
+        top_proteins = sorted(meta_profile_scores, key=meta_profile_scores.get, reverse=True)[:10]
+        for protein_name in top_proteins:
+            plt.plot(offsets, meta_profiles[protein_name], label=protein_name, linewidth=2)
 
         plt.axvline(0, color="black", linewidth=1, alpha=0.4)
         plt.xlabel("Relative nucleotide position around inference locus (nt)")
-        plt.ylabel("Crosslink file-support signal (Gaussian smoothed)")
+        plt.ylabel("Mean crosslink file-support per binf region (Gaussian smoothed)")
         plt.xlim(-args.window, args.window)
-        plt.legend(frameon=False)
-        plt.tight_layout()
+        plt.legend(frameon=False, loc="center left", bbox_to_anchor=(1.02, 0.5), borderaxespad=0.0)
+        plt.tight_layout(rect=[0.0, 0.0, 0.82, 1.0])
 
         plot_path = outdir / "metaprofile.png"
         plt.savefig(plot_path, dpi=200)
         print(f"Wrote metaprofile plot to: {plot_path}")
+        plt.close()
+
+        # Heatmap input matrix:
+        # rows = inference loci, columns = proteins, values = total support per locus.
+        heatmap_matrix = np.column_stack([totals_by_protein[pn] for pn in protein_names])
+        # Filter out low-support rows for stable clustering.
+        heatmap_row_sums = heatmap_matrix.sum(axis=1)
+        heatmap_keep_mask = heatmap_row_sums >= 10
+        heatmap_matrix_filtered = heatmap_matrix[heatmap_keep_mask, :]
+        print(
+            f"Global heatmap row filter (sum across proteins >= 10): "
+            f"kept {int(np.sum(heatmap_keep_mask))} / {len(heatmap_keep_mask)}"
+        )
+        # Logistic scaling for visualization.
+        heatmap_matrix_scaled = logistic_scale(heatmap_matrix_filtered)
+        heatmap_fig = sns.clustermap(
+            heatmap_matrix_scaled,
+            method="average",
+            metric="euclidean",
+            cmap="viridis",
+            row_cluster=(heatmap_matrix_scaled.shape[0] > 1),
+            col_cluster=(len(protein_names) > 1),
+            xticklabels=protein_names,
+            yticklabels=False,
+            figsize=(9, 10),
+        )
+        heatmap_fig.ax_heatmap.set_xlabel("Proteins")
+        heatmap_fig.ax_heatmap.set_ylabel("Inference BED loci")
+        heatmap_path = outdir / "binf_support_heatmap.png"
+        heatmap_fig.savefig(heatmap_path, dpi=200)
+        plt.close(heatmap_fig.fig)
+        print(f"Wrote clustered heatmap to: {heatmap_path}")
+
+        if args.inspect_protein is not None:
+            if inspect_counts_matrix is None:
+                available = ", ".join(protein_names)
+                raise ValueError(f"Protein '{args.inspect_protein}' not found. Available proteins: {available}")
+            nt_offsets = np.arange(-args.window, args.window + 1, dtype=np.int64)
+            inspect_totals = inspect_counts_matrix.sum(axis=1)
+            inspect_keep_mask = inspect_totals >= 5
+            inspect_counts_filtered = inspect_counts_matrix[inspect_keep_mask, :]
+            print(
+                f"{args.inspect_protein} inspect heatmap row filter (sum across nt >= 5): "
+                f"kept {int(np.sum(inspect_keep_mask))} / {len(inspect_keep_mask)}"
+            )
+            protein_nt_fig = sns.clustermap(
+                inspect_counts_filtered,
+                method="average",
+                metric="euclidean",
+                cmap="mako",
+                row_cluster=(inspect_counts_filtered.shape[0] > 1),
+                col_cluster=(len(nt_offsets) > 1),
+                xticklabels=nt_offsets,
+                yticklabels=False,
+                figsize=(12, 10),
+            )
+            protein_nt_fig.ax_heatmap.set_xlabel("Nucleotide position relative to inference locus")
+            protein_nt_fig.ax_heatmap.set_ylabel("Inference BED loci")
+            protein_nt_path = outdir / f"binf_{args.inspect_protein}_nt_support_heatmap.png"
+            protein_nt_fig.savefig(protein_nt_path, dpi=200)
+            plt.close(protein_nt_fig.fig)
+            print(f"Wrote protein nucleotide heatmap to: {protein_nt_path}")
 
         if args.table:
             tsv_path = outdir / "binf_summary.tsv"
