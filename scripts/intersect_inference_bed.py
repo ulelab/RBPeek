@@ -361,8 +361,8 @@ def main():
             plt.plot(offsets, meta_profiles[protein_name], label=protein_name, linewidth=2)
 
         plt.axvline(0, color="black", linewidth=1, alpha=0.4)
-        plt.xlabel("Relative nucleotide position around inference locus (nt)")
-        plt.ylabel("Mean crosslink file-support per binf region (Gaussian smoothed)")
+        plt.xlabel("Relative nucleotide position around inference loci (nt)")
+        plt.ylabel("Mean crosslink support per region (Gaussian smoothed)")
         plt.xlim(-args.window, args.window)
         plt.legend(frameon=False, loc="center left", bbox_to_anchor=(1.02, 0.5), borderaxespad=0.0)
         plt.tight_layout(rect=[0.0, 0.0, 0.82, 1.0])
@@ -409,10 +409,10 @@ def main():
                 raise ValueError(f"Protein '{args.inspect_protein}' not found. Available proteins: {available}")
             nt_offsets = np.arange(-args.window, args.window + 1, dtype=np.int64)
             inspect_totals = inspect_counts_matrix.sum(axis=1)
-            inspect_keep_mask = inspect_totals >= 5
+            inspect_keep_mask = inspect_totals >= 25
             inspect_counts_filtered = inspect_counts_matrix[inspect_keep_mask, :]
             print(
-                f"{args.inspect_protein} inspect heatmap row filter (sum across nt >= 5): "
+                f"{args.inspect_protein} inspect heatmap row filter (sum across nt >= 25): "
                 f"kept {int(np.sum(inspect_keep_mask))} / {len(inspect_keep_mask)}"
             )
             protein_nt_fig = sns.clustermap(

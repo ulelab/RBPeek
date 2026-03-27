@@ -1,0 +1,17 @@
+Using existing merged BED for fus: /scratch/prj/ppn_rnp_networks/users/mike.jones/RBPeek/xl/merged/fus_merged.bed
+Using existing merged BED for hnrnpc: /scratch/prj/ppn_rnp_networks/users/mike.jones/RBPeek/xl/merged/hnrnpc_merged.bed
+Using existing merged BED for hnrnpm: /scratch/prj/ppn_rnp_networks/users/mike.jones/RBPeek/xl/merged/hnrnpm_merged.bed
+Using existing merged BED for khsrp: /scratch/prj/ppn_rnp_networks/users/mike.jones/RBPeek/xl/merged/khsrp_merged.bed
+Using existing merged BED for khsrpctrl: /scratch/prj/ppn_rnp_networks/users/mike.jones/RBPeek/xl/merged/khsrpctrl_merged.bed
+Using existing merged BED for prpf8: /scratch/prj/ppn_rnp_networks/users/mike.jones/RBPeek/xl/merged/prpf8_merged.bed
+Using existing merged BED for prpf8ctrl: /scratch/prj/ppn_rnp_networks/users/mike.jones/RBPeek/xl/merged/prpf8ctrl_merged.bed
+Using existing merged BED for ptbp1: /scratch/prj/ppn_rnp_networks/users/mike.jones/RBPeek/xl/merged/ptbp1_merged.bed
+Using existing merged BED for sfb31: /scratch/prj/ppn_rnp_networks/users/mike.jones/RBPeek/xl/merged/sfb31_merged.bed
+Using existing merged BED for u2af2: /scratch/prj/ppn_rnp_networks/users/mike.jones/RBPeek/xl/merged/u2af2_merged.bed
+Using existing merged BED for u2af2ctrl: /scratch/prj/ppn_rnp_networks/users/mike.jones/RBPeek/xl/merged/u2af2ctrl_merged.bed
+Wrote metaprofile plot to: results/metaprofile.png
+Global heatmap row filter (sum across proteins >= 10): kept 9761 / 15172
+Wrote clustered heatmap to: results/binf_support_heatmap.png
+khsrp inspect heatmap row filter (sum across nt >= 25): kept 2143 / 15172
+Wrote protein nucleotide heatmap to: results/binf_khsrp_nt_support_heatmap.png
+Wrote binf summary table to: results/binf_summary.tsv
