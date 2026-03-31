@@ -1,4 +1,6 @@
 import argparse
+import csv
+import gzip
 import os
 import subprocess
 import tempfile
@@ -19,7 +21,7 @@ def parse_args():
         "-x",
         "--xldir",
         required=True,
-        help="Directory containing a subdirectory per protein (e.g. PRPF8/). If no subdirectories match, xldir itself is treated as one protein.",
+        help="Base XL directory. Used for protein subdirectories (merge mode) or direct BED inputs (skip-merge mode).",
     )
     p.add_argument(
         "-b",
@@ -47,6 +49,20 @@ def parse_args():
         default="results",
         help="Output directory for metaprofile and (optional) TSV (default: results/ in working directory)",
     )
+    p.add_argument(
+        "--skip-merge",
+        action="store_true",
+        help="Skip per-protein merge and use direct BED/BED.GZ inputs.",
+    )
+    p.add_argument(
+        "-s",
+        "--samplesheet",
+        default=None,
+        help=(
+            "Optional TSV with columns 'file' and 'group'. "
+            "'file' is resolved relative to --xldir and 'group' is used as the protein label."
+        ),
+    )
     return p.parse_args()
 
 
@@ -70,6 +86,83 @@ def list_protein_dirs(xldir: Path) -> list[Path]:
         return [xldir]
 
     raise FileNotFoundError(f"No protein crosslink beds (*genome.xl.bed) found under {xldir}")
+
+
+def _open_text_auto(path: Path):
+    if str(path).endswith(".gz"):
+        return gzip.open(path, "rt", encoding="utf-8")
+    return open(path, "r", encoding="utf-8")
+
+
+def validate_bed6(path: Path) -> None:
+    with _open_text_auto(path) as handle:
+        for line in handle:
+            if not line.strip() or line.startswith("#"):
+                continue
+            cols = line.rstrip("\n").split("\t")
+            if len(cols) < 6:
+                raise ValueError(f"Input file is not BED6+: {path}")
+            return
+    raise ValueError(f"Input file appears empty or has no BED rows: {path}")
+
+
+def load_samplesheet_inputs(samplesheet: Path, xldir: Path) -> list[tuple[str, Path]]:
+    inputs: list[tuple[str, Path]] = []
+    with open(samplesheet, "r", encoding="utf-8", newline="") as fh:
+        reader = csv.DictReader(fh, delimiter="\t")
+        if reader.fieldnames is None or "file" not in reader.fieldnames or "group" not in reader.fieldnames:
+            raise ValueError("Samplesheet must contain TSV columns: file, group")
+        for row in reader:
+            rel = (row.get("file") or "").strip()
+            grp = (row.get("group") or "").strip()
+            if not rel or not grp:
+                continue
+            p = (xldir / rel).resolve()
+            if not p.exists():
+                raise FileNotFoundError(f"Samplesheet input file not found: {p}")
+            validate_bed6(p)
+            inputs.append((grp, p))
+    if not inputs:
+        raise ValueError(f"No valid inputs found in samplesheet: {samplesheet}")
+    return inputs
+
+
+def discover_bed_inputs_from_xldir(xldir: Path) -> list[tuple[str, Path]]:
+    inputs: list[tuple[str, Path]] = []
+    for p in sorted(xldir.iterdir()):
+        if not p.is_file():
+            continue
+        name = p.name.lower()
+        if not (name.endswith(".bed") or name.endswith(".bed.gz")):
+            continue
+        validate_bed6(p)
+        # Derive group from basename without .bed/.bed.gz
+        stem = p.name
+        if stem.endswith(".bed.gz"):
+            stem = stem[: -len(".bed.gz")]
+        elif stem.endswith(".bed"):
+            stem = stem[: -len(".bed")]
+        inputs.append((stem, p))
+    if not inputs:
+        raise FileNotFoundError(f"No BED/BED.GZ files found directly in {xldir}")
+    return inputs
+
+
+def uniquify_names(named_paths: list[tuple[str, Path]]) -> list[tuple[str, Path]]:
+    """
+    Ensure unique protein labels across multiple xldirs.
+    Keeps first label as-is; subsequent duplicates get _2, _3, ...
+    """
+    counts: dict[str, int] = {}
+    out: list[tuple[str, Path]] = []
+    for name, path in named_paths:
+        n = counts.get(name, 0) + 1
+        counts[name] = n
+        if n == 1:
+            out.append((name, path))
+        else:
+            out.append((f"{name}_{n}", path))
+    return out
 
 
 def merge_protein_crosslinks(protein_dir: Path, merged_dir: Path) -> Path:
@@ -287,6 +380,11 @@ def main():
     args = parse_args()
 
     xldir = Path(args.xldir)
+    if not xldir.exists():
+        raise FileNotFoundError(f"XL directory not found: {xldir}")
+    if not xldir.is_dir():
+        raise NotADirectoryError(f"XL path is not a directory: {xldir}")
+
     binf_path = Path(args.bed)
     if not binf_path.exists():
         raise FileNotFoundError(f"Inference BED not found: {binf_path}")
@@ -295,11 +393,25 @@ def main():
 
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-    merged_dir = xldir / "merged"
-    merged_dir.mkdir(parents=True, exist_ok=True)
 
-    protein_dirs = list_protein_dirs(xldir)
-    protein_names = [p.name for p in protein_dirs]
+    if args.skip_merge:
+        if args.samplesheet is not None:
+            protein_sources = uniquify_names(load_samplesheet_inputs(Path(args.samplesheet), xldir))
+        else:
+            protein_sources = uniquify_names(discover_bed_inputs_from_xldir(xldir))
+    else:
+        if args.samplesheet is not None:
+            print("Warning: --samplesheet is ignored unless --skip-merge is set.")
+        protein_dirs: list[Path] = []
+        protein_dirs.extend(list_protein_dirs(xldir))
+        merged_sources: list[tuple[str, Path]] = []
+        for protein_dir in protein_dirs:
+            merged_dir = protein_dir.parent / "merged"
+            merged_dir.mkdir(parents=True, exist_ok=True)
+            merged_sources.append((protein_dir.name, merge_protein_crosslinks(protein_dir, merged_dir=merged_dir)))
+        protein_sources = uniquify_names(merged_sources)
+
+    protein_names = [name for name, _ in protein_sources]
 
     with tempfile.TemporaryDirectory(prefix="intersect_binf_") as tmp:
         tmpdir = Path(tmp)
@@ -326,8 +438,7 @@ def main():
         meta_profile_scores = {}
 
         plt.figure(figsize=(11, 4.5))
-        for protein_dir, protein_name in zip(protein_dirs, protein_names):
-            merged_xl_bed = merge_protein_crosslinks(protein_dir, merged_dir=merged_dir)
+        for protein_name, merged_xl_bed in protein_sources:
             counts = compute_counts_for_protein(
                 merged_xl_bed=merged_xl_bed,
                 binf_windows_bed=binf_windows_bed,

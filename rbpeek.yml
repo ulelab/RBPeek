@@ -1,0 +1,11 @@
+name: rbpeek
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.12
+  - pybedtools
+  - bedtools
+  - seaborn
+  - matplotlib
