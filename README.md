@@ -5,7 +5,7 @@ Summarize CLIP/iCLIP/eCLIP-style **crosslink (xl) support** around loci from an 
 - a **metaprofile plot** (primary output): Gaussian-smoothed **mean** XL file-support signal from \(-window:+window\) (top 10 proteins only)
 - an **optional per-locus summary table** (TSV): per-locus signal shape metrics for each protein
 - **per-protein merged XL BEDs** written under `<xldir>/merged/`
-- a **clustered heatmap** across all proteins (`binf` rows x proteins columns; values = per-locus total support, raw units)
+- a **clustered heatmap** across all proteins (`binf` rows x proteins columns; values = per-locus total support after logistic scaling)
 - a **heatmap cluster assignment table** for downstream cluster-specific metaprofiles
 - an optional **single-protein nucleotide heatmap** (`binf` rows x nt columns) via `-i/--inspect-protein`
 
@@ -142,7 +142,7 @@ File: `<outdir>/binf_support_heatmap.png`
 
 - rows: `binf` loci
 - columns: proteins
-- values: per-locus total support (`total_overlaps`)
+- values: per-locus total support (`total_overlaps`) transformed by logistic scaling
 - pre-filter rows: keep loci with `sum(total_overlaps across proteins) >= 10`
 - hierarchical clustering: rows and columns (row clustering is done after filtering)
 - row annotations: cluster color bar (`C1..Cn`) derived from row dendrogram cut using `--n-clusters`
@@ -174,6 +174,7 @@ Enabled by `--table --tsne`.
 File: `<outdir>/binf_summary_tsne.png`
 
 - input features: all `*_total_overlaps` columns from `binf_summary.tsv`
+- feature transform: same logistic scaling used for the global heatmap
 - one point per `binf` row
 - points are colored by heatmap row cluster when available (unassigned rows shown in gray)
 - requires `scikit-learn` in the environment
@@ -227,7 +228,7 @@ These metrics are computed from the per-locus vector across \(-window..+window\)
   - take the window with the maximum sum
   - report the **center** position of that window as an offset
 
-## Notes / gotchas
+## Notes
 
 - Input coordinates can repeat (duplicate `chr/start/end`); the script keeps **one row per input BED line** and handles duplicates during intersection.
 - Runtime is dominated by the `bedtools groupby` merge and `bedtools intersect` steps for large XL datasets.

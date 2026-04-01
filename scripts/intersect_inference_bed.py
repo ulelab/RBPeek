@@ -396,6 +396,16 @@ def smooth_metaprofile_gaussian(meta_counts: np.ndarray, sigma: float = 2.0) -> 
     return np.convolve(meta_counts, kernel, mode="same")
 
 
+def logistic_scale(matrix: np.ndarray) -> np.ndarray:
+    # Logistic scaling after robust centering/scaling to compress large dynamic range.
+    center = float(np.median(matrix))
+    spread = float(np.std(matrix))
+    if spread <= 0:
+        spread = 1.0
+    z = (matrix - center) / spread
+    return 1.0 / (1.0 + np.exp(-z))
+
+
 def plot_cluster_metaprofiles(
     protein_sources: list[tuple[str, Path]],
     cluster_ids_sorted: list[int],
@@ -475,6 +485,8 @@ def make_tsne_from_binf_summary(
         raise ValueError("Need at least 2 rows in binf_summary.tsv for tSNE.")
 
     matrix = np.array([[float(r[c]) for c in total_cols] for r in rows], dtype=np.float64)
+    # Keep tSNE feature scaling consistent with heatmap clustering.
+    matrix = logistic_scale(matrix)
     max_perplexity = max(1.0, float(len(rows) - 1))
     used_perplexity = min(float(perplexity), max_perplexity)
     embedding = TSNE(n_components=2, perplexity=used_perplexity, random_state=random_state).fit_transform(matrix)
@@ -640,10 +652,11 @@ def main():
         if heatmap_matrix_filtered.shape[0] == 0:
             raise ValueError("No inference BED rows pass the global heatmap filter (sum across proteins >= 10).")
 
-        # Use raw support units for heatmap and clustering.
+        # Logistic-scale for heatmap visualization and clustering stability.
         n_row_clusters = min(args.n_clusters, heatmap_matrix_filtered.shape[0])
+        heatmap_matrix_scaled = logistic_scale(heatmap_matrix_filtered)
         if heatmap_matrix_filtered.shape[0] > 1:
-            row_linkage = linkage(heatmap_matrix_filtered, method="average", metric="euclidean")
+            row_linkage = linkage(heatmap_matrix_scaled, method="average", metric="euclidean")
             row_clusters = fcluster(row_linkage, t=n_row_clusters, criterion="maxclust")
         else:
             row_linkage = None
@@ -656,7 +669,7 @@ def main():
         row_colors = [cluster_to_color[int(cid)] for cid in row_clusters]
 
         heatmap_fig = sns.clustermap(
-            heatmap_matrix_filtered,
+            heatmap_matrix_scaled,
             method="average",
             metric="euclidean",
             cmap="viridis",
