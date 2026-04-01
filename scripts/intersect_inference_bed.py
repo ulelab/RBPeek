@@ -12,6 +12,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
+from matplotlib.patches import Patch
+from scipy.cluster.hierarchy import fcluster, linkage
 
 DEFAULT_GENOME = "/camp/home/jonesm6/home/shared/genomes/hg38/hg38.genome"
 
@@ -29,8 +31,19 @@ def parse_args():
         required=True,
         help="Inference BED (must have at least 6 columns; strand in column 6).",
     )
-    p.add_argument("--window", type=int, default=50, help="Half-window size in bp around each inference locus")
+    p.add_argument("--window", type=int, default=100, help="Half-window size in bp around each inference locus")
     p.add_argument("--gaussian-sigma", type=float, default=2.0, help="Gaussian smoothing sigma for metaprofile")
+    p.add_argument(
+        "--cluster-metaprofiles",
+        action="store_true",
+        help="If set, write one metaprofile plot per heatmap row cluster.",
+    )
+    p.add_argument(
+        "--n-clusters",
+        type=int,
+        default=4,
+        help="Number of row clusters to extract from the global heatmap (default: 4).",
+    )
     p.add_argument(
         "-i",
         "--inspect-protein",
@@ -42,6 +55,23 @@ def parse_args():
         "--table",
         action="store_true",
         help="If set, write per-locus summary TSV.",
+    )
+    p.add_argument(
+        "--tsne",
+        action="store_true",
+        help="If set, generate a tSNE plot from <outdir>/binf_summary.tsv total-overlap columns.",
+    )
+    p.add_argument(
+        "--tsne-perplexity",
+        type=float,
+        default=30.0,
+        help="tSNE perplexity (will be clipped to valid range for sample count).",
+    )
+    p.add_argument(
+        "--tsne-random-state",
+        type=int,
+        default=42,
+        help="Random seed for tSNE reproducibility.",
     )
     p.add_argument(
         "-o",
@@ -366,18 +396,131 @@ def smooth_metaprofile_gaussian(meta_counts: np.ndarray, sigma: float = 2.0) -> 
     return np.convolve(meta_counts, kernel, mode="same")
 
 
-def logistic_scale(matrix: np.ndarray) -> np.ndarray:
-    # Logistic scaling after robust centering/scaling to compress large dynamic range.
-    center = float(np.median(matrix))
-    spread = float(np.std(matrix))
-    if spread <= 0:
-        spread = 1.0
-    z = (matrix - center) / spread
-    return 1.0 / (1.0 + np.exp(-z))
+def plot_cluster_metaprofiles(
+    protein_sources: list[tuple[str, Path]],
+    cluster_ids_sorted: list[int],
+    all_cluster_labels: np.ndarray,
+    binf_windows_bed: Path,
+    binf_index: dict[tuple[str, int, int], list[int]],
+    window: int,
+    n_binf: int,
+    sigma: float,
+    outdir: Path,
+) -> None:
+    offsets = np.arange(-window, window + 1, dtype=np.int64)
+    cluster_masks = {cid: (all_cluster_labels == cid) for cid in cluster_ids_sorted}
+    cluster_profiles: dict[int, dict[str, np.ndarray]] = {cid: {} for cid in cluster_ids_sorted}
+    cluster_scores: dict[int, dict[str, float]] = {cid: {} for cid in cluster_ids_sorted}
+
+    for protein_name, merged_xl_bed in protein_sources:
+        counts = compute_counts_for_protein(
+            merged_xl_bed=merged_xl_bed,
+            binf_windows_bed=binf_windows_bed,
+            binf_index=binf_index,
+            window=window,
+            n_binf=n_binf,
+        )
+        for cid in cluster_ids_sorted:
+            mask = cluster_masks[cid]
+            if not np.any(mask):
+                continue
+            meta_counts = counts[mask, :].mean(axis=0)
+            smoothed = smooth_metaprofile_gaussian(meta_counts, sigma=sigma)
+            cluster_profiles[cid][protein_name] = smoothed
+            cluster_scores[cid][protein_name] = float(np.sum(smoothed))
+
+    for cid in cluster_ids_sorted:
+        profiles = cluster_profiles[cid]
+        if not profiles:
+            continue
+        top_proteins = sorted(cluster_scores[cid], key=cluster_scores[cid].get, reverse=True)[:10]
+        plt.figure(figsize=(11, 4.5))
+        for protein_name in top_proteins:
+            plt.plot(offsets, profiles[protein_name], label=protein_name, linewidth=2)
+        plt.axvline(0, color="black", linewidth=1, alpha=0.4)
+        plt.xlabel("Relative nucleotide position around inference loci (nt)")
+        plt.ylabel("Mean crosslink support per region (Gaussian smoothed)")
+        plt.title(f"Cluster C{cid} metaprofile")
+        plt.xlim(-window, window)
+        plt.legend(frameon=False, loc="center left", bbox_to_anchor=(1.02, 0.5), borderaxespad=0.0)
+        plt.tight_layout(rect=[0.0, 0.0, 0.82, 1.0])
+        out_path = outdir / f"metaprofile_cluster_C{cid}.png"
+        plt.savefig(out_path, dpi=200)
+        plt.close()
+        print(f"Wrote cluster metaprofile plot to: {out_path}")
+
+
+def make_tsne_from_binf_summary(
+    tsv_path: Path,
+    out_path: Path,
+    perplexity: float,
+    random_state: int,
+    row_clusters: np.ndarray | None = None,
+) -> None:
+    try:
+        from sklearn.manifold import TSNE
+    except ImportError as e:
+        raise ImportError("scikit-learn is required for --tsne. Install scikit-learn in your environment.") from e
+
+    with open(tsv_path, "r", encoding="utf-8", newline="") as fh:
+        reader = csv.DictReader(fh, delimiter="\t")
+        if reader.fieldnames is None:
+            raise ValueError(f"Summary table has no header: {tsv_path}")
+        total_cols = [c for c in reader.fieldnames if c.endswith("_total_overlaps")]
+        if not total_cols:
+            raise ValueError(f"No *_total_overlaps columns found in {tsv_path}")
+        rows = list(reader)
+
+    if len(rows) < 2:
+        raise ValueError("Need at least 2 rows in binf_summary.tsv for tSNE.")
+
+    matrix = np.array([[float(r[c]) for c in total_cols] for r in rows], dtype=np.float64)
+    max_perplexity = max(1.0, float(len(rows) - 1))
+    used_perplexity = min(float(perplexity), max_perplexity)
+    embedding = TSNE(n_components=2, perplexity=used_perplexity, random_state=random_state).fit_transform(matrix)
+
+    plt.figure(figsize=(7, 6))
+    if row_clusters is not None and len(row_clusters) == embedding.shape[0]:
+        valid = row_clusters > 0
+        if np.any(valid):
+            plt.scatter(
+                embedding[~valid, 0],
+                embedding[~valid, 1],
+                s=10,
+                alpha=0.25,
+                c="lightgray",
+                edgecolors="none",
+                label="Unassigned",
+            )
+            sc = plt.scatter(
+                embedding[valid, 0],
+                embedding[valid, 1],
+                s=12,
+                alpha=0.8,
+                c=row_clusters[valid],
+                cmap="tab10",
+                edgecolors="none",
+            )
+            plt.colorbar(sc, label="Heatmap row cluster")
+        else:
+            plt.scatter(embedding[:, 0], embedding[:, 1], s=12, alpha=0.8, edgecolors="none")
+    else:
+        plt.scatter(embedding[:, 0], embedding[:, 1], s=12, alpha=0.8, edgecolors="none")
+    plt.xlabel("tSNE-1")
+    plt.ylabel("tSNE-2")
+    plt.title("tSNE of binf summary total-overlap features")
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200)
+    plt.close()
+    print(f"Wrote tSNE plot to: {out_path} (perplexity={used_perplexity})")
 
 
 def main():
     args = parse_args()
+    if args.n_clusters < 1:
+        raise ValueError("--n-clusters must be >= 1")
+    if args.tsne and not args.table:
+        raise ValueError("--tsne requires --table so binf_summary.tsv is available.")
 
     xldir = Path(args.xldir)
     if not xldir.exists():
@@ -494,25 +637,105 @@ def main():
             f"Global heatmap row filter (sum across proteins >= 10): "
             f"kept {int(np.sum(heatmap_keep_mask))} / {len(heatmap_keep_mask)}"
         )
-        # Logistic scaling for visualization.
-        heatmap_matrix_scaled = logistic_scale(heatmap_matrix_filtered)
+        if heatmap_matrix_filtered.shape[0] == 0:
+            raise ValueError("No inference BED rows pass the global heatmap filter (sum across proteins >= 10).")
+
+        # Use raw support units for heatmap and clustering.
+        n_row_clusters = min(args.n_clusters, heatmap_matrix_filtered.shape[0])
+        if heatmap_matrix_filtered.shape[0] > 1:
+            row_linkage = linkage(heatmap_matrix_filtered, method="average", metric="euclidean")
+            row_clusters = fcluster(row_linkage, t=n_row_clusters, criterion="maxclust")
+        else:
+            row_linkage = None
+            row_clusters = np.array([1], dtype=np.int64)
+
+        # Annotate heatmap rows with cluster colors.
+        cluster_ids_sorted = sorted(np.unique(row_clusters))
+        cluster_palette = sns.color_palette("tab10", n_colors=max(len(cluster_ids_sorted), 1))
+        cluster_to_color = {cid: cluster_palette[i] for i, cid in enumerate(cluster_ids_sorted)}
+        row_colors = [cluster_to_color[int(cid)] for cid in row_clusters]
+
         heatmap_fig = sns.clustermap(
-            heatmap_matrix_scaled,
+            heatmap_matrix_filtered,
             method="average",
             metric="euclidean",
             cmap="viridis",
-            row_cluster=(heatmap_matrix_scaled.shape[0] > 1),
+            row_cluster=(heatmap_matrix_filtered.shape[0] > 1),
             col_cluster=(len(protein_names) > 1),
+            row_linkage=row_linkage,
+            row_colors=row_colors,
             xticklabels=protein_names,
             yticklabels=False,
             figsize=(9, 10),
         )
         heatmap_fig.ax_heatmap.set_xlabel("Proteins")
         heatmap_fig.ax_heatmap.set_ylabel("Inference BED loci")
+        legend_handles = [Patch(facecolor=cluster_to_color[cid], edgecolor="none", label=f"C{cid}") for cid in cluster_ids_sorted]
+        heatmap_fig.ax_heatmap.legend(
+            handles=legend_handles,
+            title="Row clusters",
+            loc="upper left",
+            bbox_to_anchor=(1.02, 1.0),
+            frameon=False,
+        )
         heatmap_path = outdir / "binf_support_heatmap.png"
         heatmap_fig.savefig(heatmap_path, dpi=200)
         plt.close(heatmap_fig.fig)
         print(f"Wrote clustered heatmap to: {heatmap_path}")
+        cluster_sizes = {int(cid): int(np.sum(row_clusters == cid)) for cid in cluster_ids_sorted}
+        print(f"Global heatmap row clusters: {cluster_sizes}")
+
+        # Export per-locus cluster assignment aligned to original inference BED order.
+        all_cluster_labels = np.full(n_binf, -1, dtype=np.int64)
+        keep_indices = np.flatnonzero(heatmap_keep_mask)
+        all_cluster_labels[keep_indices] = row_clusters
+        cluster_tsv_path = outdir / "binf_heatmap_clusters.tsv"
+        with open(cluster_tsv_path, "w", encoding="utf-8") as fout:
+            fout.write(
+                "\t".join(
+                    [
+                        "binf_chr_start_end",
+                        "chrom",
+                        "start",
+                        "end",
+                        "row_sum_support",
+                        "passes_heatmap_filter",
+                        "heatmap_cluster",
+                    ]
+                )
+                + "\n"
+            )
+            for i, key in enumerate(binf_keys):
+                chrom, start_str, end_str = key.split("_", 2)
+                passes = bool(heatmap_keep_mask[i])
+                cluster_label = str(int(all_cluster_labels[i])) if passes else "NA"
+                fout.write(
+                    "\t".join(
+                        [
+                            key,
+                            chrom,
+                            start_str,
+                            end_str,
+                            f"{heatmap_row_sums[i]:.6g}",
+                            "True" if passes else "False",
+                            cluster_label,
+                        ]
+                    )
+                    + "\n"
+                )
+        print(f"Wrote heatmap cluster assignments to: {cluster_tsv_path}")
+        if args.cluster_metaprofiles:
+            plot_cluster_metaprofiles(
+                protein_sources=protein_sources,
+                cluster_ids_sorted=cluster_ids_sorted,
+                all_cluster_labels=all_cluster_labels,
+                binf_windows_bed=binf_windows_bed,
+                binf_index=binf_index,
+                window=args.window,
+                n_binf=n_binf,
+                sigma=args.gaussian_sigma,
+                outdir=outdir,
+            )
 
         if args.inspect_protein is not None:
             if inspect_counts_matrix is None:
@@ -571,6 +794,15 @@ def main():
                     fout.write("\t".join(row) + "\n")
 
             print(f"Wrote binf summary table to: {tsv_path}")
+            if args.tsne:
+                tsne_path = outdir / "binf_summary_tsne.png"
+                make_tsne_from_binf_summary(
+                    tsv_path=tsv_path,
+                    out_path=tsne_path,
+                    perplexity=args.tsne_perplexity,
+                    random_state=args.tsne_random_state,
+                    row_clusters=all_cluster_labels,
+                )
 
 
 if __name__ == "__main__":

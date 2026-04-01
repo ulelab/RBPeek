@@ -1,11 +1,12 @@
-# `intersect_decoy.py`
+# `intersect_inference_bed.py`
 
 Summarize CLIP/iCLIP/eCLIP-style **crosslink (xl) support** around loci from an **inference BED** across *multiple proteins*, producing:
 
 - a **metaprofile plot** (primary output): Gaussian-smoothed **mean** XL file-support signal from \(-window:+window\) (top 10 proteins only)
 - an **optional per-locus summary table** (TSV): per-locus signal shape metrics for each protein
 - **per-protein merged XL BEDs** written under `<xldir>/merged/`
-- a **clustered heatmap** across all proteins (`binf` rows x proteins columns; values = per-locus total support)
+- a **clustered heatmap** across all proteins (`binf` rows x proteins columns; values = per-locus total support, raw units)
+- a **heatmap cluster assignment table** for downstream cluster-specific metaprofiles
 - an optional **single-protein nucleotide heatmap** (`binf` rows x nt columns) via `-i/--inspect-protein`
 
 ## Inputs
@@ -56,10 +57,10 @@ Created by using samtools faidx or cut -f1,2 on reference genome fasta index fil
 ## CLI
 
 ```bash
-python3 intronretention/hnRNPH1_IR_MAF/scripts/intersect_decoy.py \
+python3 scripts/intersect_inference_bed.py \
   -x <xldir> \
   -b <inference.bed> \
-  --window 50 \
+  --window 100 \
   --gaussian-sigma 2.0 \
   -i PRPF8 \
   --table \
@@ -70,10 +71,17 @@ python3 intronretention/hnRNPH1_IR_MAF/scripts/intersect_decoy.py \
 
 - **`-x/--xldir`**: xl root directory (required)
 - **`-b/--bed`**: inference BED (required)
-- **`--window`**: half-window size (default 50). Output offsets run from \(-window..+window\).
+- **`--window`**: half-window size (default 100). Output offsets run from \(-window..+window\).
 - **`--gaussian-sigma`**: sigma parameter for Gaussian metaprofile smoothing (default 2.0)
+- **`--cluster-metaprofiles`**: if set, write one metaprofile plot per heatmap cluster (`metaprofile_cluster_C*.png`)
+- **`--n-clusters`**: number of row clusters to extract for the global heatmap and cluster TSV (default 4)
 - **`-i/--inspect-protein`**: optional protein name for an extra per-nucleotide heatmap for that protein
+- **`--skip-merge`**: skip per-protein merge and use direct BED/BED.GZ inputs from `--xldir`
+- **`-s/--samplesheet`**: optional TSV (`file`, `group`) used with `--skip-merge`; `file` is resolved relative to `--xldir`
 - **`--table`**: if set, write the per-locus summary TSV
+- **`--tsne`**: if set, generate tSNE from `binf_summary.tsv` using all `*_total_overlaps` columns (requires `--table`)
+- **`--tsne-perplexity`**: tSNE perplexity (default 30; clipped to valid range)
+- **`--tsne-random-state`**: tSNE random seed (default 42)
 - **`-o/--outdir`**: directory for plot + TSV (default `results/` in the current working directory)
 
 ## What the script does
@@ -93,6 +101,15 @@ Output:
 ```
 
 Chromosome names are normalized to `chr*` (e.g. `1` → `chr1`) to match typical BED naming.
+
+### 1b) Alternate input mode (`--skip-merge`)
+
+When `--skip-merge` is used, the script does not merge protein subdirectories.
+
+- with `-s/--samplesheet`: reads a TSV with `file` and `group` columns
+  - `file` paths are relative to `--xldir`
+  - `group` becomes the protein label in plots/tables
+- without `--samplesheet`: uses all BED/BED.GZ files directly in `--xldir`
 
 ### 2) Build per-locus signal vectors
 
@@ -127,9 +144,39 @@ File: `<outdir>/binf_support_heatmap.png`
 - columns: proteins
 - values: per-locus total support (`total_overlaps`)
 - pre-filter rows: keep loci with `sum(total_overlaps across proteins) >= 10`
-- transform values with logistic scaling for visualization:
-  - `scaled = 1 / (1 + exp(-z))`, where `z` is robust centered/scaled signal
 - hierarchical clustering: rows and columns (row clustering is done after filtering)
+- row annotations: cluster color bar (`C1..Cn`) derived from row dendrogram cut using `--n-clusters`
+
+### Heatmap cluster assignments (always)
+
+File: `<outdir>/binf_heatmap_clusters.tsv`
+
+- one row per input `binf` locus (same order as summary table)
+- columns:
+  - `binf_chr_start_end`
+  - `chrom`, `start`, `end`
+  - `row_sum_support` (sum across proteins)
+  - `passes_heatmap_filter` (`True`/`False`, threshold `>=10`)
+  - `heatmap_cluster` (`1..n` for kept rows, `NA` for filtered rows)
+
+### Cluster metaprofiles (optional)
+
+Enabled by `--cluster-metaprofiles`.
+
+- one metaprofile plot per heatmap row cluster
+- files: `<outdir>/metaprofile_cluster_C1.png`, `<outdir>/metaprofile_cluster_C2.png`, ...
+- for each cluster: mean support profile is computed only from loci assigned to that cluster
+
+### tSNE from summary table (optional)
+
+Enabled by `--table --tsne`.
+
+File: `<outdir>/binf_summary_tsne.png`
+
+- input features: all `*_total_overlaps` columns from `binf_summary.tsv`
+- one point per `binf` row
+- points are colored by heatmap row cluster when available (unassigned rows shown in gray)
+- requires `scikit-learn` in the environment
 
 ### Single-protein nucleotide heatmap (optional)
 
@@ -140,7 +187,7 @@ File: `<outdir>/binf_<protein>_nt_support_heatmap.png`
 - rows: `binf` loci
 - columns: nucleotide positions from `-window..+window`
 - values: merged support score at each relative nucleotide offset for the selected protein
-- pre-filter rows: keep loci with `sum(across nt positions) >= 5` for the selected protein
+- pre-filter rows: keep loci with `sum(across nt positions) >= 25` for the selected protein
 - hierarchical clustering: rows and columns (row clustering is done after filtering)
 
 ### Summary table (optional)

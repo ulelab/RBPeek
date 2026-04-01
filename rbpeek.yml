@@ -9,3 +9,4 @@ dependencies:
   - bedtools
   - seaborn
   - matplotlib
+  - scikit-learn

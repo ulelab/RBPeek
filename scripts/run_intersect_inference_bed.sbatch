@@ -13,9 +13,12 @@ which python
 python -c "import matplotlib, seaborn, pybedtools; print('ok')"
 
 python3 scripts/intersect_inference_bed.py \
-  --xldir ../CLIP \
-  --bed decoys/Decoys_proteincoding_splicescores.bed \
-  --samplesheet RBPeekSamplesheet.tsv \
+  -x ../CLIP \
+  -b decoys/Decoys_proteincoding_splicescores.bed \
+  -s RBPeekSamplesheet.tsv \
   --skip-merge \
   --table \
-  --outdir results
+  -o results \
+  --n-clusters 4 \
+  --cluster-metaprofiles \
+  --tsne
