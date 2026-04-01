@@ -6,6 +6,12 @@
 
 set -euo pipefail
 
+source /camp/home/jonesm6/home/users/jonesm6/software/miniconda3/etc/profile.d/conda.sh
+conda activate rbpeek
+
+which python
+python -c "import matplotlib, seaborn, pybedtools; print('ok')"
+
 python3 scripts/intersect_inference_bed.py \
   --xldir ../CLIP \
   --bed decoys/Decoys_proteincoding_splicescores.bed \

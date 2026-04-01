@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 
-DEFAULT_GENOME = "/scratch/prj/ppn_rnp_networks/shared/references/genomes/homo_sapiens/GRCh38.p14-GencodeRelease44/hg38.genome"
+DEFAULT_GENOME = "/camp/home/jonesm6/home/shared/genomes/hg38/hg38.genome"
 
 def parse_args():
     p = argparse.ArgumentParser(description="Intersect inference BED with multiple crosslink types and summarize")
