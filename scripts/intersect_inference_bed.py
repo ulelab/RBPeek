@@ -693,14 +693,14 @@ def main():
         # Filter out low-support rows for stable clustering (sum across all proteins in full table).
         full_row_sums = np.column_stack([totals_by_protein[pn] for pn in protein_names]).sum(axis=1)
         heatmap_row_sums = full_row_sums
-        heatmap_keep_mask = heatmap_row_sums >= 10
+        heatmap_keep_mask = heatmap_row_sums >= 25
         heatmap_matrix_filtered = heatmap_matrix[heatmap_keep_mask, :]
         print(
-            f"Global heatmap row filter (sum across all proteins >= 10): "
+            f"Global heatmap row filter (sum across all proteins >= 25): "
             f"kept {int(np.sum(heatmap_keep_mask))} / {len(heatmap_keep_mask)}"
         )
         if heatmap_matrix_filtered.shape[0] == 0:
-            raise ValueError("No inference BED rows pass the global heatmap filter (sum across proteins >= 10).")
+            raise ValueError("No inference BED rows pass the global heatmap filter (sum across proteins >= 25).")
 
         # Logistic-scale for heatmap visualization and clustering stability.
         heatmap_matrix_scaled = logistic_scale(heatmap_matrix_filtered)
@@ -845,7 +845,7 @@ def main():
                 metric="euclidean",
                 cmap="mako",
                 row_cluster=(inspect_counts_filtered.shape[0] > 1),
-                col_cluster=(len(nt_offsets) > 1),
+                col_cluster=False,
                 xticklabels=nt_offsets,
                 yticklabels=False,
                 figsize=(12, 10),
