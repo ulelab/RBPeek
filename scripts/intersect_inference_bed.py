@@ -17,6 +17,8 @@ from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.spatial.distance import pdist
 
 DEFAULT_GENOME = "/camp/home/jonesm6/home/shared/genomes/hg38/hg38.genome"
+HEATMAP_TOP_PROTEINS = 100
+METAPROFILE_TOP_PROTEINS = 10
 
 def parse_args():
     p = argparse.ArgumentParser(description="Intersect inference BED with multiple crosslink types and summarize")
@@ -48,10 +50,19 @@ def parse_args():
     p.add_argument(
         "--cluster-top-proteins",
         type=int,
-        default=10,
+        default=HEATMAP_TOP_PROTEINS,
         help=(
-            "Use only the top K XL groups by summed total_overlaps across all loci for the "
-            "heatmap, row clustering, and tSNE (default: 10). Set to a large value to use all groups."
+            "Use top K XL groups by summed total_overlaps across all loci for heatmap/clustering/tSNE "
+            f"(default: {HEATMAP_TOP_PROTEINS})."
+        ),
+    )
+    p.add_argument(
+        "--metaprofile-top-proteins",
+        type=int,
+        default=METAPROFILE_TOP_PROTEINS,
+        help=(
+            "Use top K proteins for global and per-cluster metaprofile plotting "
+            f"(default: {METAPROFILE_TOP_PROTEINS})."
         ),
     )
     p.add_argument(
@@ -425,6 +436,7 @@ def plot_cluster_metaprofiles(
     window: int,
     n_binf: int,
     sigma: float,
+    metaprofile_top_k: int,
     outdir: Path,
 ) -> None:
     offsets = np.arange(-window, window + 1, dtype=np.int64)
@@ -453,7 +465,7 @@ def plot_cluster_metaprofiles(
         profiles = cluster_profiles[cid]
         if not profiles:
             continue
-        top_proteins = sorted(cluster_scores[cid], key=cluster_scores[cid].get, reverse=True)[:100]
+        top_proteins = sorted(cluster_scores[cid], key=cluster_scores[cid].get, reverse=True)[:metaprofile_top_k]
         plt.figure(figsize=(11, 4.5))
         for protein_name in top_proteins:
             plt.plot(offsets, profiles[protein_name], label=protein_name, linewidth=2)
@@ -568,6 +580,8 @@ def main():
         raise ValueError("--n-clusters must be >= 1")
     if args.cluster_top_proteins < 1:
         raise ValueError("--cluster-top-proteins must be >= 1")
+    if args.metaprofile_top_proteins < 1:
+        raise ValueError("--metaprofile-top-proteins must be >= 1")
     if args.tsne and not args.table:
         raise ValueError("--tsne requires --table so binf_summary.tsv is available.")
 
@@ -604,6 +618,7 @@ def main():
         protein_sources = uniquify_names(merged_sources)
 
     protein_names = [name for name, _ in protein_sources]
+    metaprofile_top_k = min(args.metaprofile_top_proteins, len(protein_names))
 
     with tempfile.TemporaryDirectory(prefix="intersect_binf_") as tmp:
         tmpdir = Path(tmp)
@@ -656,10 +671,10 @@ def main():
             meta_counts = counts.mean(axis=0)
             smoothed = smooth_metaprofile_gaussian(meta_counts, sigma=args.gaussian_sigma)
             meta_profiles[protein_name] = smoothed
-            # Rank proteins by total metaprofile signal and plot top 100 only.
+            # Rank proteins by total metaprofile signal and plot top-K only.
             meta_profile_scores[protein_name] = float(np.sum(smoothed))
 
-        top_proteins = sorted(meta_profile_scores, key=meta_profile_scores.get, reverse=True)[:100]
+        top_proteins = sorted(meta_profile_scores, key=meta_profile_scores.get, reverse=True)[:metaprofile_top_k]
         for protein_name in top_proteins:
             plt.plot(offsets, meta_profiles[protein_name], label=protein_name, linewidth=2)
 
@@ -675,7 +690,7 @@ def main():
         print(f"Wrote metaprofile plot to: {plot_path}")
         plt.close()
 
-        # Heatmap: rank proteins by total signal, keep top K for clustering (reduces noise from long tail).
+        # Heatmap: rank proteins by total signal, keep top-K for clustering/tSNE.
         protein_signal_rank = sorted(
             protein_names,
             key=lambda pn: float(np.sum(totals_by_protein[pn])),
@@ -693,14 +708,14 @@ def main():
         # Filter out low-support rows for stable clustering (sum across all proteins in full table).
         full_row_sums = np.column_stack([totals_by_protein[pn] for pn in protein_names]).sum(axis=1)
         heatmap_row_sums = full_row_sums
-        heatmap_keep_mask = heatmap_row_sums >= 25
+        heatmap_keep_mask = heatmap_row_sums >= 40
         heatmap_matrix_filtered = heatmap_matrix[heatmap_keep_mask, :]
         print(
-            f"Global heatmap row filter (sum across all proteins >= 25): "
+            f"Global heatmap row filter (sum across all proteins >= 40): "
             f"kept {int(np.sum(heatmap_keep_mask))} / {len(heatmap_keep_mask)}"
         )
         if heatmap_matrix_filtered.shape[0] == 0:
-            raise ValueError("No inference BED rows pass the global heatmap filter (sum across proteins >= 25).")
+            raise ValueError("No inference BED rows pass the global heatmap filter (sum across proteins >= 40).")
 
         # Logistic-scale for heatmap visualization and clustering stability.
         heatmap_matrix_scaled = logistic_scale(heatmap_matrix_filtered)
@@ -824,6 +839,7 @@ def main():
                 window=args.window,
                 n_binf=n_binf,
                 sigma=args.gaussian_sigma,
+                metaprofile_top_k=metaprofile_top_k,
                 outdir=outdir,
             )
 
@@ -835,16 +851,17 @@ def main():
             inspect_totals = inspect_counts_matrix.sum(axis=1)
             inspect_keep_mask = inspect_totals >= 25
             inspect_counts_filtered = inspect_counts_matrix[inspect_keep_mask, :]
+            inspect_counts_log = np.log1p(inspect_counts_filtered)
             print(
                 f"{args.inspect_protein} inspect heatmap row filter (sum across nt >= 25): "
                 f"kept {int(np.sum(inspect_keep_mask))} / {len(inspect_keep_mask)}"
             )
             protein_nt_fig = sns.clustermap(
-                inspect_counts_filtered,
+                inspect_counts_log,
                 method="average",
                 metric="euclidean",
                 cmap="mako",
-                row_cluster=(inspect_counts_filtered.shape[0] > 1),
+                row_cluster=(inspect_counts_log.shape[0] > 1),
                 col_cluster=False,
                 xticklabels=nt_offsets,
                 yticklabels=False,
