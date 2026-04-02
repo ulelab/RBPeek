@@ -13,12 +13,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 from matplotlib.patches import Patch
-from scipy.cluster.hierarchy import fcluster, linkage
+from scipy.cluster.hierarchy import linkage
 from scipy.spatial.distance import pdist
 
 DEFAULT_GENOME = "/camp/home/jonesm6/home/shared/genomes/hg38/hg38.genome"
 HEATMAP_TOP_PROTEINS = 100
 METAPROFILE_TOP_PROTEINS = 15
+ROW_KMEANS_DEFAULT = 20
 
 def parse_args():
     p = argparse.ArgumentParser(description="Intersect inference BED with multiple crosslink types and summarize")
@@ -44,8 +45,11 @@ def parse_args():
     p.add_argument(
         "--n-clusters",
         type=int,
-        default=4,
-        help="Number of row clusters to extract from hierarchical heatmap clustering (default: 4).",
+        default=ROW_KMEANS_DEFAULT,
+        help=(
+            "Number of k-means clusters on the binarized (presence/absence) heatmap row matrix "
+            f"(default: {ROW_KMEANS_DEFAULT}). Capped at the number of filtered rows."
+        ),
     )
     p.add_argument(
         "--cluster-top-proteins",
@@ -525,7 +529,6 @@ def make_tsne_from_binf_summary(
     plt.figure(figsize=(7, 6))
     if row_clusters is not None and len(row_clusters) == embedding.shape[0]:
         not_in_heatmap = row_clusters < 0
-        low_signal = row_clusters == 0
         in_cluster = row_clusters > 0
         if np.any(not_in_heatmap):
             plt.scatter(
@@ -537,16 +540,6 @@ def make_tsne_from_binf_summary(
                 edgecolors="none",
                 label="Not in heatmap filter",
             )
-        if np.any(low_signal):
-            plt.scatter(
-                embedding[low_signal, 0],
-                embedding[low_signal, 1],
-                s=10,
-                alpha=0.35,
-                c="gray",
-                edgecolors="none",
-                label="C0 low-signal",
-            )
         if np.any(in_cluster):
             sc = plt.scatter(
                 embedding[in_cluster, 0],
@@ -554,13 +547,13 @@ def make_tsne_from_binf_summary(
                 s=12,
                 alpha=0.85,
                 c=row_clusters[in_cluster],
-                cmap="tab10",
+                cmap="tab20",
                 edgecolors="none",
             )
             plt.colorbar(sc, label="Heatmap row cluster")
-        if np.any(not_in_heatmap) or np.any(low_signal):
+        if np.any(not_in_heatmap):
             plt.legend(loc="best", frameon=False, fontsize=8)
-        if not (np.any(not_in_heatmap) or np.any(low_signal) or np.any(in_cluster)):
+        if not (np.any(not_in_heatmap) or np.any(in_cluster)):
             plt.scatter(embedding[:, 0], embedding[:, 1], s=12, alpha=0.8, edgecolors="none")
     else:
         plt.scatter(embedding[:, 0], embedding[:, 1], s=12, alpha=0.8, edgecolors="none")
@@ -717,48 +710,53 @@ def main():
         if heatmap_matrix_filtered.shape[0] == 0:
             raise ValueError("No inference BED rows pass the global heatmap filter (sum across proteins >= 40).")
 
-        # Logistic-scale for heatmap visualization and clustering stability.
+        # Logistic-scale for heatmap display; k-means clustering uses binarized presence/absence.
         heatmap_matrix_scaled = logistic_scale(heatmap_matrix_filtered)
         n_filt = heatmap_matrix_scaled.shape[0]
+        binary_rows = (heatmap_matrix_filtered > 0.0).astype(np.float64)
 
-        # Cosine distance is undefined for zero vectors; only cluster active rows.
-        row_active_mask = heatmap_matrix_scaled.max(axis=1) > 0.6
-        n_active = int(np.sum(row_active_mask))
-        print(f"Cosine clustering active rows (max scaled support > 0.6): {n_active} / {n_filt}")
-        if n_active == 0:
-            raise ValueError("No active rows available for cosine clustering (all rows <= 0.6 scaled support).")
-        active_matrix = heatmap_matrix_scaled[row_active_mask, :]
+        try:
+            from sklearn.cluster import KMeans
+        except ImportError as e:
+            raise ImportError("scikit-learn is required for k-means row clustering. Install scikit-learn.") from e
 
-        n_row_clusters = min(args.n_clusters, n_active)
-        if n_active > 1:
-            row_distances = pdist(active_matrix, metric="cosine")
-            row_linkage = linkage(row_distances, method="average")
-            row_clusters = fcluster(row_linkage, t=n_row_clusters, criterion="maxclust")
-        else:
-            row_linkage = None
-            row_clusters = np.array([1], dtype=np.int64)
+        k_fit = min(args.n_clusters, n_filt)
+        if k_fit < 1:
+            raise ValueError("No rows available for k-means clustering.")
+        km = KMeans(n_clusters=k_fit, random_state=args.tsne_random_state, n_init="auto")
+        km_labels = km.fit_predict(binary_rows).astype(np.int64)
+        # sklearn uses 0..k-1; use 1..k for downstream labels
+        row_clusters = km_labels + 1
 
-        if active_matrix.shape[1] > 1:
-            col_distances = pdist(active_matrix.T, metric="cosine")
+        # Row order: by cluster id (asc), then by total crosslink support (desc) within cluster.
+        row_totals_filtered = heatmap_row_sums[heatmap_keep_mask]
+        sort_idx = np.lexsort((-row_totals_filtered.astype(np.float64), row_clusters))
+        heatmap_display = heatmap_matrix_scaled[sort_idx]
+        row_clusters_sorted = row_clusters[sort_idx]
+
+        # Column linkage only: cosine distance between proteins across rows (order-independent).
+        if heatmap_matrix_scaled.shape[1] > 1:
+            col_distances = pdist(heatmap_matrix_scaled.T, metric="cosine")
             col_linkage = linkage(col_distances, method="average")
         else:
             col_linkage = None
 
         cluster_ids_sorted = sorted(np.unique(row_clusters))
-        cluster_palette = sns.color_palette("tab10", n_colors=max(len(cluster_ids_sorted), 1))
+        n_colors = max(len(cluster_ids_sorted), 1)
+        if n_colors <= 20:
+            cluster_palette = sns.color_palette("tab20", n_colors=n_colors)
+        else:
+            cluster_palette = sns.color_palette("husl", n_colors=n_colors)
         cluster_to_color = {cid: cluster_palette[i] for i, cid in enumerate(cluster_ids_sorted)}
-        row_colors = [cluster_to_color[int(cid)] for cid in row_clusters]
+        row_colors = [cluster_to_color[int(cid)] for cid in row_clusters_sorted]
 
         heatmap_fig = sns.clustermap(
-            active_matrix,
-            method="average",
-            metric="cosine",
-            cmap="viridis",
-            row_cluster=(n_active > 1),
-            col_cluster=(active_matrix.shape[1] > 1),
-            row_linkage=row_linkage,
+            heatmap_display,
+            row_cluster=False,
+            col_cluster=(heatmap_display.shape[1] > 1),
             col_linkage=col_linkage,
             row_colors=row_colors,
+            cmap="viridis",
             xticklabels=cluster_protein_names,
             yticklabels=False,
             figsize=(9, 10),
@@ -770,7 +768,7 @@ def main():
         ]
         heatmap_fig.ax_heatmap.legend(
             handles=legend_handles,
-            title="Row clusters",
+            title="Row clusters (k-means, binary)",
             loc="upper left",
             bbox_to_anchor=(1.02, 1.0),
             frameon=False,
@@ -780,15 +778,12 @@ def main():
         plt.close(heatmap_fig.fig)
         print(f"Wrote clustered heatmap to: {heatmap_path}")
         cluster_sizes = {int(cid): int(np.sum(row_clusters == cid)) for cid in np.unique(row_clusters)}
-        print(f"Row cluster sizes (cosine+average): {cluster_sizes}")
+        print(f"Row cluster sizes (binary k-means, k={k_fit}): {cluster_sizes}")
 
         # Export per-locus cluster assignment aligned to original inference BED order.
         all_cluster_labels = np.full(n_binf, -1, dtype=np.int64)
         keep_indices = np.flatnonzero(heatmap_keep_mask)
-        active_indices = keep_indices[row_active_mask]
-        inactive_indices = keep_indices[~row_active_mask]
-        all_cluster_labels[inactive_indices] = 0  # C0 = low-signal filtered from cosine clustering
-        all_cluster_labels[active_indices] = row_clusters
+        all_cluster_labels[keep_indices] = row_clusters
         cluster_tsv_path = outdir / "binf_heatmap_clusters.tsv"
         with open(cluster_tsv_path, "w", encoding="utf-8") as fout:
             fout.write(
@@ -808,12 +803,7 @@ def main():
             for i, key in enumerate(binf_keys):
                 chrom, start_str, end_str = key.split("_", 2)
                 passes = bool(heatmap_keep_mask[i])
-                if not passes:
-                    cluster_label = "NA"
-                elif int(all_cluster_labels[i]) == 0:
-                    cluster_label = "C0"
-                else:
-                    cluster_label = str(int(all_cluster_labels[i]))
+                cluster_label = str(int(all_cluster_labels[i])) if passes else "NA"
                 fout.write(
                     "\t".join(
                         [

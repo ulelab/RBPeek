@@ -74,7 +74,7 @@ python3 scripts/intersect_inference_bed.py \
 - **`--window`**: half-window size (default 100). Output offsets run from \(-window..+window\).
 - **`--gaussian-sigma`**: sigma parameter for Gaussian metaprofile smoothing (default 2.0)
 - **`--cluster-metaprofiles`**: if set, write one metaprofile plot per heatmap cluster (`metaprofile_cluster_C*.png`)
-- **`--n-clusters`**: number of row clusters for hierarchical heatmap clustering (default 4)
+- **`--n-clusters`**: number of k-means clusters on the binarized heatmap row matrix (default 20; capped by number of filtered rows)
 - **`--cluster-top-proteins`**: top K XL groups used for heatmap/clustering/tSNE features (default 100)
 - **`--metaprofile-top-proteins`**: top K proteins plotted in global/per-cluster metaprofiles (default 15)
 - **`-i/--inspect-protein`**: optional protein name for an extra per-nucleotide heatmap for that protein
@@ -145,12 +145,11 @@ File: `<outdir>/binf_support_heatmap.png`
 - rows: `binf` loci
 - columns: the **top K** XL groups by global total signal from `--cluster-top-proteins` (default 100), not the full protein list
 - values: per-locus total support (`total_overlaps`) transformed by logistic scaling
-- pre-filter rows: keep loci with `sum(total_overlaps across *all* XL groups) >= 10` (filter uses the full table; heatmap columns are still top-K only)
-- active-row gate before cosine clustering: rows with `max(logistic_scaled_topK_vector) > 0.5` are clustered; other filtered rows are labeled `C0` (low-signal)
-- hierarchical clustering on active rows: cosine distance (`pdist(..., metric="cosine")`) + average linkage
-- row labels from `fcluster(..., criterion="maxclust", t=--n-clusters)` on the cosine linkage
-- column dendrogram: cosine distance + average linkage across proteins
-- row and column dendrograms are shown when there is more than one row/column
+- pre-filter rows: keep loci with `sum(total_overlaps across *all* XL groups) >= 40` (filter uses the full table; heatmap columns are still top-K only)
+- **row clustering**: build a **binary** matrix over the top-K proteins (`1` if support `> 0` at that locus/protein, else `0`), then **k-means** (`--n-clusters`, default 20) on those binary rows
+- **row order** (no row dendrogram): sort by cluster id (ascending), then by total crosslink support across all proteins (descending) within each cluster
+- **column clustering only**: cosine distance + average linkage between protein columns (computed on the scaled matrix before row reorder; row order does not change column vectors for linkage)
+- heatmap **values** shown are still **logistic-scaled** continuous totals (viridis)
 
 ### Heatmap cluster assignments (always)
 
@@ -161,8 +160,8 @@ File: `<outdir>/binf_heatmap_clusters.tsv`
   - `binf_chr_start_end`
   - `chrom`, `start`, `end`
   - `row_sum_support` (sum of `total_overlaps` across **all** XL groups)
-  - `passes_heatmap_filter` (`True`/`False`, threshold `>=10`)
-  - `heatmap_cluster`: `NA` if row fails heatmap filter; `C0` for low-signal filtered rows (`max_scaled <= 0.5`); otherwise integer cluster id (`1..n`)
+  - `passes_heatmap_filter` (`True`/`False`, threshold `>=40` on sum across all proteins)
+  - `heatmap_cluster`: `NA` if row fails heatmap filter; otherwise integer k-means cluster id (`1..k`)
 
 ### Cluster metaprofiles (optional)
 
@@ -181,7 +180,7 @@ File: `<outdir>/binf_summary_tsne.png`
 - input features: `*_total_overlaps` columns for the **same top-K proteins** as the heatmap (`--cluster-top-proteins`)
 - feature transform: same logistic scaling used for the global heatmap
 - one point per `binf` row
-- points: colored by cluster id for `C1..Cn`; `C0` is gray; rows not in heatmap filter are light gray
+- points: colored by k-means cluster id (`1..k`); rows not in heatmap filter are light gray
 - requires `scikit-learn` in the environment
 
 ### Single-protein nucleotide heatmap (optional)
@@ -194,7 +193,7 @@ File: `<outdir>/binf_<protein>_nt_support_heatmap.png`
 - columns: nucleotide positions from `-window..+window`
 - values: merged support score at each relative nucleotide offset for the selected protein
 - pre-filter rows: keep loci with `sum(across nt positions) >= 10` for the selected protein
-- hierarchical clustering: rows and columns (row clustering is done after filtering)
+- hierarchical clustering on rows only; nucleotide columns stay in genomic order (`-window..+window`)
 
 ### Summary table (optional)
 
