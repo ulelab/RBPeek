@@ -722,11 +722,11 @@ def main():
         n_filt = heatmap_matrix_scaled.shape[0]
 
         # Cosine distance is undefined for zero vectors; only cluster active rows.
-        row_active_mask = heatmap_matrix_scaled.max(axis=1) > 0.5
+        row_active_mask = heatmap_matrix_scaled.max(axis=1) > 0.6
         n_active = int(np.sum(row_active_mask))
-        print(f"Cosine clustering active rows (max scaled support > 0.5): {n_active} / {n_filt}")
+        print(f"Cosine clustering active rows (max scaled support > 0.6): {n_active} / {n_filt}")
         if n_active == 0:
-            raise ValueError("No active rows available for cosine clustering (all rows <= 0.5 scaled support).")
+            raise ValueError("No active rows available for cosine clustering (all rows <= 0.6 scaled support).")
         active_matrix = heatmap_matrix_scaled[row_active_mask, :]
 
         n_row_clusters = min(args.n_clusters, n_active)

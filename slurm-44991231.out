@@ -1,0 +1,33 @@
+/camp/home/jonesm6/home/users/jonesm6/software/miniconda3/envs/rbpeek/bin/python
+ok
+Wrote metaprofile plot to: results/metaprofile.png
+Heatmap/clustering/tSNE use top 100 XL groups by summed total_overlaps (of 297): HepG2-PRPF8-eCLIP, HepG2-GRWD1-eCLIP, K562-KHSRP-eCLIP, HepG2-PTBP1-eCLIP, K562-PTBP1-eCLIP ...
+Global heatmap row filter (sum across all proteins >= 40): kept 3864 / 15172
+Cosine clustering active rows (max scaled support > 0.6): 1512 / 3864
+Wrote clustered heatmap to: results/binf_support_heatmap.png
+Row cluster sizes (cosine+average): {1: 3, 2: 5, 3: 6, 4: 9, 5: 1, 6: 1, 7: 2, 8: 2, 9: 4, 10: 2, 11: 1, 12: 1, 13: 6, 14: 31, 15: 4, 16: 1430, 17: 1, 18: 1, 19: 1, 20: 1}
+Wrote heatmap cluster assignments to: results/binf_heatmap_clusters.tsv
+Wrote cluster metaprofile plot to: results/metaprofile_cluster_C1.png
+Wrote cluster metaprofile plot to: results/metaprofile_cluster_C2.png
+Wrote cluster metaprofile plot to: results/metaprofile_cluster_C3.png
+Wrote cluster metaprofile plot to: results/metaprofile_cluster_C4.png
+Wrote cluster metaprofile plot to: results/metaprofile_cluster_C5.png
+Wrote cluster metaprofile plot to: results/metaprofile_cluster_C6.png
+Wrote cluster metaprofile plot to: results/metaprofile_cluster_C7.png
+Wrote cluster metaprofile plot to: results/metaprofile_cluster_C8.png
+Wrote cluster metaprofile plot to: results/metaprofile_cluster_C9.png
+Wrote cluster metaprofile plot to: results/metaprofile_cluster_C10.png
+Wrote cluster metaprofile plot to: results/metaprofile_cluster_C11.png
+Wrote cluster metaprofile plot to: results/metaprofile_cluster_C12.png
+Wrote cluster metaprofile plot to: results/metaprofile_cluster_C13.png
+Wrote cluster metaprofile plot to: results/metaprofile_cluster_C14.png
+Wrote cluster metaprofile plot to: results/metaprofile_cluster_C15.png
+Wrote cluster metaprofile plot to: results/metaprofile_cluster_C16.png
+Wrote cluster metaprofile plot to: results/metaprofile_cluster_C17.png
+Wrote cluster metaprofile plot to: results/metaprofile_cluster_C18.png
+Wrote cluster metaprofile plot to: results/metaprofile_cluster_C19.png
+Wrote cluster metaprofile plot to: results/metaprofile_cluster_C20.png
+K562-PTBP1-eCLIP inspect heatmap row filter (sum across nt >= 25): kept 22 / 15172
+Wrote protein nucleotide heatmap to: results/binf_K562-PTBP1-eCLIP_nt_support_heatmap.png
+Wrote binf summary table to: results/binf_summary.tsv
+Wrote tSNE plot to: results/binf_summary_tsne.png (perplexity=30.0)
