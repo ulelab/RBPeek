@@ -2,7 +2,7 @@
 
 Summarize CLIP/iCLIP/eCLIP-style **crosslink (xl) support** around loci from an **inference BED** across *multiple proteins*, producing:
 
-- a **metaprofile plot** (primary output): Gaussian-smoothed **mean** XL file-support signal from \(-window:+window\) (top 10 proteins only)
+- a **metaprofile plot** (primary output): Gaussian-smoothed **mean** XL file-support signal from \(-window:+window\) (top 100 proteins only)
 - an **optional per-locus summary table** (TSV): per-locus signal shape metrics for each protein
 - **per-protein merged XL BEDs** written under `<xldir>/merged/`
 - a **clustered heatmap** across all proteins (`binf` rows x proteins columns; values = per-locus total support after logistic scaling)
@@ -81,7 +81,7 @@ python3 scripts/intersect_inference_bed.py \
 - **`-s/--samplesheet`**: optional TSV (`file`, `group`) used with `--skip-merge`; `file` is resolved relative to `--xldir`
 - **`--table`**: if set, write the per-locus summary TSV
 - **`--tsne`**: if set, generate tSNE from `binf_summary.tsv` using the same top-K `*_total_overlaps` columns as the heatmap (requires `--table`)
-- **`--tsne-perplexity`**: tSNE perplexity (default 10; clipped to valid range)
+- **`--tsne-perplexity`**: tSNE perplexity (default 30; clipped to valid range)
 - **`--tsne-random-state`**: tSNE random seed (default 42)
 - **`-o/--outdir`**: directory for plot + TSV (default `results/` in the current working directory)
 
@@ -134,7 +134,7 @@ For each protein:
 - compute `total_overlaps = sum(vector)` for each locus
 - compute the **mean** support vector across all loci (average by number of input `binf` regions)
 - smooth with a **Gaussian kernel** controlled by `--gaussian-sigma`
-- rank proteins by total smoothed metaprofile signal and plot only the **top 10**
+- rank proteins by total smoothed metaprofile signal and plot only the **top 100**
 - place legend on the right side of the figure
 
 ### Clustered heatmap (always)
@@ -145,7 +145,10 @@ File: `<outdir>/binf_support_heatmap.png`
 - columns: the **top K** XL groups by global total signal (`--cluster-top-proteins`, default 10), not the full protein list
 - values: per-locus total support (`total_overlaps`) transformed by logistic scaling
 - pre-filter rows: keep loci with `sum(total_overlaps across *all* XL groups) >= 10` (filter uses the full table; heatmap columns are still top-K only)
-- hierarchical clustering: average linkage + `fcluster(..., maxclust=--n-clusters)` on logistic-scaled matrix
+- active-row gate before cosine clustering: rows with `max(logistic_scaled_topK_vector) > 0.5` are clustered; other filtered rows are labeled `C0` (low-signal)
+- hierarchical clustering on active rows: cosine distance (`pdist(..., metric="cosine")`) + average linkage
+- row labels from `fcluster(..., criterion="maxclust", t=--n-clusters)` on the cosine linkage
+- column dendrogram: cosine distance + average linkage across proteins
 - row and column dendrograms are shown when there is more than one row/column
 
 ### Heatmap cluster assignments (always)
@@ -158,7 +161,7 @@ File: `<outdir>/binf_heatmap_clusters.tsv`
   - `chrom`, `start`, `end`
   - `row_sum_support` (sum of `total_overlaps` across **all** XL groups)
   - `passes_heatmap_filter` (`True`/`False`, threshold `>=10`)
-  - `heatmap_cluster`: integer cluster id (`1..n`) for rows that pass the heatmap filter; `NA` otherwise
+  - `heatmap_cluster`: `NA` if row fails heatmap filter; `C0` for low-signal filtered rows (`max_scaled <= 0.5`); otherwise integer cluster id (`1..n`)
 
 ### Cluster metaprofiles (optional)
 
@@ -177,7 +180,7 @@ File: `<outdir>/binf_summary_tsne.png`
 - input features: `*_total_overlaps` columns for the **same top-K proteins** as the heatmap (see `--cluster-top-proteins`)
 - feature transform: same logistic scaling used for the global heatmap
 - one point per `binf` row
-- points: colored by cluster id where `heatmap_cluster` is assigned; rows not in heatmap filter are shown in light gray
+- points: colored by cluster id for `C1..Cn`; `C0` is gray; rows not in heatmap filter are light gray
 - requires `scikit-learn` in the environment
 
 ### Single-protein nucleotide heatmap (optional)
