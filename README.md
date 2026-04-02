@@ -74,17 +74,14 @@ python3 scripts/intersect_inference_bed.py \
 - **`--window`**: half-window size (default 100). Output offsets run from \(-window..+window\).
 - **`--gaussian-sigma`**: sigma parameter for Gaussian metaprofile smoothing (default 2.0)
 - **`--cluster-metaprofiles`**: if set, write one metaprofile plot per heatmap cluster (`metaprofile_cluster_C*.png`)
-- **`--cluster-method`**: `dbscan` (default) or `hierarchical` (average linkage + `--n-clusters` cuts)
-- **`--n-clusters`**: number of row clusters (**hierarchical** mode only; default 4)
-- **`--dbscan-eps`**: DBSCAN neighborhood radius on logistic-scaled features; if omitted, a median k-distance default is used
-- **`--dbscan-min-samples`**: DBSCAN `min_samples` (default: `max(5, ceil(1% of filtered rows))`)
-- **`--cluster-top-proteins`**: use only the top K XL groups by summed `total_overlaps` across all loci for the heatmap, clustering, and tSNE (default 30; use a large value to include all groups)
+- **`--n-clusters`**: number of row clusters for hierarchical heatmap clustering (default 4)
+- **`--cluster-top-proteins`**: use only the top K XL groups by summed `total_overlaps` across all loci for the heatmap, clustering, and tSNE (default 10; use a large value to include all groups)
 - **`-i/--inspect-protein`**: optional protein name for an extra per-nucleotide heatmap for that protein
 - **`--skip-merge`**: skip per-protein merge and use direct BED/BED.GZ inputs from `--xldir`
 - **`-s/--samplesheet`**: optional TSV (`file`, `group`) used with `--skip-merge`; `file` is resolved relative to `--xldir`
 - **`--table`**: if set, write the per-locus summary TSV
 - **`--tsne`**: if set, generate tSNE from `binf_summary.tsv` using the same top-K `*_total_overlaps` columns as the heatmap (requires `--table`)
-- **`--tsne-perplexity`**: tSNE perplexity (default 30; clipped to valid range)
+- **`--tsne-perplexity`**: tSNE perplexity (default 10; clipped to valid range)
 - **`--tsne-random-state`**: tSNE random seed (default 42)
 - **`-o/--outdir`**: directory for plot + TSV (default `results/` in the current working directory)
 
@@ -145,12 +142,11 @@ For each protein:
 File: `<outdir>/binf_support_heatmap.png`
 
 - rows: `binf` loci
-- columns: the **top K** XL groups by global total signal (`--cluster-top-proteins`, default 30), not the full protein list
+- columns: the **top K** XL groups by global total signal (`--cluster-top-proteins`, default 10), not the full protein list
 - values: per-locus total support (`total_overlaps`) transformed by logistic scaling
 - pre-filter rows: keep loci with `sum(total_overlaps across *all* XL groups) >= 10` (filter uses the full table; heatmap columns are still top-K only)
-- **DBSCAN** (`--cluster-method dbscan`, default): density clustering on the same scaled matrix; **noise** points are labeled `noise` in the cluster TSV and shown in gray on the heatmap; rows are sorted (clusters first, noise last) without a row dendrogram
-- **Hierarchical** (`--cluster-method hierarchical`): average linkage + `fcluster(..., maxclust=--n-clusters)`; row and column dendrograms as before
-- column clustering: hierarchical clustering of protein columns when there is more than one
+- hierarchical clustering: average linkage + `fcluster(..., maxclust=--n-clusters)` on logistic-scaled matrix
+- row and column dendrograms are shown when there is more than one row/column
 
 ### Heatmap cluster assignments (always)
 
@@ -162,7 +158,7 @@ File: `<outdir>/binf_heatmap_clusters.tsv`
   - `chrom`, `start`, `end`
   - `row_sum_support` (sum of `total_overlaps` across **all** XL groups)
   - `passes_heatmap_filter` (`True`/`False`, threshold `>=10`)
-  - `heatmap_cluster`: `NA` if the row fails the heatmap filter; `noise` for DBSCAN noise; otherwise integer cluster id (`1..n`; DBSCAN dense clusters, hierarchical uses `fcluster` ids)
+  - `heatmap_cluster`: integer cluster id (`1..n`) for rows that pass the heatmap filter; `NA` otherwise
 
 ### Cluster metaprofiles (optional)
 
@@ -170,7 +166,7 @@ Enabled by `--cluster-metaprofiles`.
 
 - one metaprofile plot per heatmap row cluster
 - files: `<outdir>/metaprofile_cluster_C1.png`, `<outdir>/metaprofile_cluster_C2.png`, ...
-- for each cluster: mean support profile is computed only from loci assigned to that cluster (noise rows are excluded)
+- for each cluster: mean support profile is computed only from loci assigned to that cluster
 
 ### tSNE from summary table (optional)
 
@@ -181,7 +177,7 @@ File: `<outdir>/binf_summary_tsne.png`
 - input features: `*_total_overlaps` columns for the **same top-K proteins** as the heatmap (see `--cluster-top-proteins`)
 - feature transform: same logistic scaling used for the global heatmap
 - one point per `binf` row
-- points: colored by cluster id where `heatmap_cluster` is a positive integer; **not in heatmap filter** = light gray; **noise** (DBSCAN) = dim gray
+- points: colored by cluster id where `heatmap_cluster` is assigned; rows not in heatmap filter are shown in light gray
 - requires `scikit-learn` in the environment
 
 ### Single-protein nucleotide heatmap (optional)

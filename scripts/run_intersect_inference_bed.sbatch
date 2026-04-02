@@ -14,10 +14,6 @@ conda activate rbpeek
 which python
 python -c "import matplotlib, seaborn, pybedtools, sklearn; print('ok')"
 
-# Default row clustering is DBSCAN (--cluster-method dbscan). For average linkage + fixed k clusters:
-#   add: --cluster-method hierarchical --n-clusters 4
-# Optional: --cluster-top-proteins 30 (default), --dbscan-eps / --dbscan-min-samples to tune DBSCAN
-
 python3 scripts/intersect_inference_bed.py \
   -x ../CLIP \
   -b decoys/Decoys_proteincoding_splicescores.bed \
@@ -25,6 +21,7 @@ python3 scripts/intersect_inference_bed.py \
   --skip-merge \
   --table \
   -o results \
-  --cluster-method dbscan \
   --cluster-metaprofiles \
+  --cluster-top-proteins 10 \
+  --n-clusters 4 \
   --tsne

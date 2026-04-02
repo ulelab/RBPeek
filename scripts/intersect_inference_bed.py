@@ -39,39 +39,18 @@ def parse_args():
         help="If set, write one metaprofile plot per heatmap row cluster.",
     )
     p.add_argument(
-        "--cluster-method",
-        choices=["dbscan", "hierarchical"],
-        default="dbscan",
-        help="Row clustering for heatmap: dbscan (density) or hierarchical (linkage + maxclust).",
-    )
-    p.add_argument(
         "--n-clusters",
         type=int,
         default=4,
-        help="Number of row clusters (hierarchical mode only; ignored for dbscan).",
-    )
-    p.add_argument(
-        "--dbscan-eps",
-        type=float,
-        default=None,
-        help=(
-            "DBSCAN eps (neighborhood radius) on logistic-scaled features. "
-            "If omitted, uses median k-distance heuristic (see --dbscan-min-samples)."
-        ),
-    )
-    p.add_argument(
-        "--dbscan-min-samples",
-        type=int,
-        default=None,
-        help="DBSCAN min_samples (default: max(5, ceil(1%% of filtered rows))).",
+        help="Number of row clusters to extract from hierarchical heatmap clustering (default: 4).",
     )
     p.add_argument(
         "--cluster-top-proteins",
         type=int,
-        default=30,
+        default=10,
         help=(
             "Use only the top K XL groups by summed total_overlaps across all loci for the "
-            "heatmap, row clustering, and tSNE (default: 30). Set to a large value to use all groups."
+            "heatmap, row clustering, and tSNE (default: 10). Set to a large value to use all groups."
         ),
     )
     p.add_argument(
@@ -426,20 +405,6 @@ def smooth_metaprofile_gaussian(meta_counts: np.ndarray, sigma: float = 2.0) -> 
     return np.convolve(meta_counts, kernel, mode="same")
 
 
-def default_dbscan_eps(X: np.ndarray, min_samples: int) -> float:
-    """Median k-distance heuristic for default eps (k = min(min_samples, n-1))."""
-    from sklearn.neighbors import NearestNeighbors
-
-    n = X.shape[0]
-    if n < 2:
-        return 1.0
-    k = min(max(1, min_samples), n - 1)
-    nn = NearestNeighbors(n_neighbors=k)
-    nn.fit(X)
-    dists, _ = nn.kneighbors(X)
-    return float(np.percentile(dists[:, -1], 50))
-
-
 def logistic_scale(matrix: np.ndarray) -> np.ndarray:
     # Logistic scaling after robust centering/scaling to compress large dynamic range.
     center = float(np.median(matrix))
@@ -546,9 +511,7 @@ def make_tsne_from_binf_summary(
 
     plt.figure(figsize=(7, 6))
     if row_clusters is not None and len(row_clusters) == embedding.shape[0]:
-        # -1 = not in heatmap filter; 0 = DBSCAN noise; >=1 = cluster id
         not_in_heatmap = row_clusters < 0
-        noise = row_clusters == 0
         in_cluster = row_clusters > 0
         if np.any(not_in_heatmap):
             plt.scatter(
@@ -559,16 +522,6 @@ def make_tsne_from_binf_summary(
                 c="lightgray",
                 edgecolors="none",
                 label="Not in heatmap filter",
-            )
-        if np.any(noise):
-            plt.scatter(
-                embedding[noise, 0],
-                embedding[noise, 1],
-                s=11,
-                alpha=0.55,
-                c="dimgray",
-                edgecolors="none",
-                label="noise",
             )
         if np.any(in_cluster):
             sc = plt.scatter(
@@ -581,9 +534,9 @@ def make_tsne_from_binf_summary(
                 edgecolors="none",
             )
             plt.colorbar(sc, label="Heatmap row cluster")
-        if np.any(not_in_heatmap) or np.any(noise):
+        if np.any(not_in_heatmap):
             plt.legend(loc="best", frameon=False, fontsize=8)
-        if not (np.any(not_in_heatmap) or np.any(noise) or np.any(in_cluster)):
+        if not (np.any(not_in_heatmap) or np.any(in_cluster)):
             plt.scatter(embedding[:, 0], embedding[:, 1], s=12, alpha=0.8, edgecolors="none")
     else:
         plt.scatter(embedding[:, 0], embedding[:, 1], s=12, alpha=0.8, edgecolors="none")
@@ -599,8 +552,8 @@ def make_tsne_from_binf_summary(
 
 def main():
     args = parse_args()
-    if args.cluster_method == "hierarchical" and args.n_clusters < 1:
-        raise ValueError("--n-clusters must be >= 1 for hierarchical clustering")
+    if args.n_clusters < 1:
+        raise ValueError("--n-clusters must be >= 1")
     if args.cluster_top_proteins < 1:
         raise ValueError("--cluster-top-proteins must be >= 1")
     if args.tsne and not args.table:
@@ -741,61 +694,27 @@ def main():
         heatmap_matrix_scaled = logistic_scale(heatmap_matrix_filtered)
         n_filt = heatmap_matrix_scaled.shape[0]
 
-        if args.cluster_method == "hierarchical":
-            n_row_clusters = min(args.n_clusters, n_filt)
-            if n_filt > 1:
-                row_linkage = linkage(heatmap_matrix_scaled, method="average", metric="euclidean")
-                row_clusters = fcluster(row_linkage, t=n_row_clusters, criterion="maxclust")
-            else:
-                row_linkage = None
-                row_clusters = np.array([1], dtype=np.int64)
-            heatmap_plot_matrix = heatmap_matrix_scaled
-            row_clusters_for_plot = row_clusters
+        n_row_clusters = min(args.n_clusters, n_filt)
+        if n_filt > 1:
+            row_linkage = linkage(heatmap_matrix_scaled, method="average", metric="euclidean")
+            row_clusters = fcluster(row_linkage, t=n_row_clusters, criterion="maxclust")
         else:
-            from sklearn.cluster import DBSCAN
-
             row_linkage = None
-            min_samples = args.dbscan_min_samples
-            if min_samples is None:
-                min_samples = max(5, int(np.ceil(0.01 * n_filt)))
-            min_samples = max(1, min(min_samples, n_filt))
-            eps = args.dbscan_eps if args.dbscan_eps is not None else default_dbscan_eps(heatmap_matrix_scaled, min_samples)
-            if eps <= 0:
-                raise ValueError("DBSCAN eps must be positive")
-            sk_labels = DBSCAN(eps=eps, min_samples=min_samples).fit_predict(heatmap_matrix_scaled)
-            # sklearn: -1 = noise -> 0; 0..C-1 -> 1..C
-            row_clusters = np.where(sk_labels < 0, 0, sk_labels + 1).astype(np.int64)
-            print(f"DBSCAN: eps={eps:.6g}, min_samples={min_samples}")
-            # Sort rows: positive cluster ids first, noise (0) last (stable).
-            sort_max = int(row_clusters.max()) + 10 if n_filt else 0
-            sort_key = np.where(row_clusters == 0, sort_max, row_clusters)
-            sort_idx = np.argsort(sort_key, kind="stable")
-            heatmap_plot_matrix = heatmap_matrix_scaled[sort_idx]
-            row_clusters_for_plot = row_clusters[sort_idx]
+            row_clusters = np.array([1], dtype=np.int64)
 
-        # Annotate heatmap rows with cluster colors.
-        if args.cluster_method == "hierarchical":
-            cluster_ids_sorted = sorted(np.unique(row_clusters))
-            cluster_palette = sns.color_palette("tab10", n_colors=max(len(cluster_ids_sorted), 1))
-            cluster_to_color = {cid: cluster_palette[i] for i, cid in enumerate(cluster_ids_sorted)}
-            row_colors = [cluster_to_color[int(cid)] for cid in row_clusters_for_plot]
-        else:
-            cluster_ids_sorted = sorted(int(c) for c in np.unique(row_clusters) if c > 0)
-            noise_color = (0.75, 0.75, 0.75)
-            cluster_palette = sns.color_palette("tab10", n_colors=max(len(cluster_ids_sorted), 1))
-            cluster_to_color = {cid: cluster_palette[i] for i, cid in enumerate(cluster_ids_sorted)}
-            cluster_to_color[0] = noise_color
-            row_colors = [cluster_to_color[int(cid)] for cid in row_clusters_for_plot]
+        cluster_ids_sorted = sorted(np.unique(row_clusters))
+        cluster_palette = sns.color_palette("tab10", n_colors=max(len(cluster_ids_sorted), 1))
+        cluster_to_color = {cid: cluster_palette[i] for i, cid in enumerate(cluster_ids_sorted)}
+        row_colors = [cluster_to_color[int(cid)] for cid in row_clusters]
 
-        row_cluster_arg = args.cluster_method == "hierarchical" and n_filt > 1
         heatmap_fig = sns.clustermap(
-            heatmap_plot_matrix,
+            heatmap_matrix_scaled,
             method="average",
             metric="euclidean",
             cmap="viridis",
-            row_cluster=row_cluster_arg,
+            row_cluster=(n_filt > 1),
             col_cluster=(len(cluster_protein_names) > 1),
-            row_linkage=row_linkage if row_cluster_arg else None,
+            row_linkage=row_linkage,
             row_colors=row_colors,
             xticklabels=cluster_protein_names,
             yticklabels=False,
@@ -803,17 +722,9 @@ def main():
         )
         heatmap_fig.ax_heatmap.set_xlabel("Proteins")
         heatmap_fig.ax_heatmap.set_ylabel("Inference BED loci")
-        if args.cluster_method == "hierarchical":
-            legend_handles = [
-                Patch(facecolor=cluster_to_color[cid], edgecolor="none", label=f"C{cid}") for cid in cluster_ids_sorted
-            ]
-        else:
-            legend_handles = []
-            if np.any(row_clusters == 0):
-                legend_handles.append(Patch(facecolor=cluster_to_color[0], edgecolor="none", label="noise"))
-            legend_handles.extend(
-                [Patch(facecolor=cluster_to_color[cid], edgecolor="none", label=f"C{cid}") for cid in cluster_ids_sorted]
-            )
+        legend_handles = [
+            Patch(facecolor=cluster_to_color[cid], edgecolor="none", label=f"C{cid}") for cid in cluster_ids_sorted
+        ]
         heatmap_fig.ax_heatmap.legend(
             handles=legend_handles,
             title="Row clusters",
@@ -826,7 +737,7 @@ def main():
         plt.close(heatmap_fig.fig)
         print(f"Wrote clustered heatmap to: {heatmap_path}")
         cluster_sizes = {int(cid): int(np.sum(row_clusters == cid)) for cid in np.unique(row_clusters)}
-        print(f"Row cluster sizes ({args.cluster_method}): {cluster_sizes}")
+        print(f"Row cluster sizes (hierarchical): {cluster_sizes}")
 
         # Export per-locus cluster assignment aligned to original inference BED order.
         all_cluster_labels = np.full(n_binf, -1, dtype=np.int64)
@@ -851,12 +762,7 @@ def main():
             for i, key in enumerate(binf_keys):
                 chrom, start_str, end_str = key.split("_", 2)
                 passes = bool(heatmap_keep_mask[i])
-                if not passes:
-                    cluster_label = "NA"
-                elif int(all_cluster_labels[i]) == 0:
-                    cluster_label = "noise"
-                else:
-                    cluster_label = str(int(all_cluster_labels[i]))
+                cluster_label = str(int(all_cluster_labels[i])) if passes else "NA"
                 fout.write(
                     "\t".join(
                         [
