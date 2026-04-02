@@ -76,7 +76,7 @@ python3 scripts/intersect_inference_bed.py \
 - **`--cluster-metaprofiles`**: if set, write one metaprofile plot per heatmap cluster (`metaprofile_cluster_C*.png`)
 - **`--n-clusters`**: number of row clusters for hierarchical heatmap clustering (default 4)
 - **`--cluster-top-proteins`**: top K XL groups used for heatmap/clustering/tSNE features (default 100)
-- **`--metaprofile-top-proteins`**: top K proteins plotted in global/per-cluster metaprofiles (default 10)
+- **`--metaprofile-top-proteins`**: top K proteins plotted in global/per-cluster metaprofiles (default 15)
 - **`-i/--inspect-protein`**: optional protein name for an extra per-nucleotide heatmap for that protein
 - **`--skip-merge`**: skip per-protein merge and use direct BED/BED.GZ inputs from `--xldir`
 - **`-s/--samplesheet`**: optional TSV (`file`, `group`) used with `--skip-merge`; `file` is resolved relative to `--xldir`
@@ -135,7 +135,7 @@ For each protein:
 - compute `total_overlaps = sum(vector)` for each locus
 - compute the **mean** support vector across all loci (average by number of input `binf` regions)
 - smooth with a **Gaussian kernel** controlled by `--gaussian-sigma`
-- rank proteins by total smoothed metaprofile signal and plot only the **top K** from `--metaprofile-top-proteins` (default 10)
+- rank proteins by total smoothed metaprofile signal and plot only the **top K** from `--metaprofile-top-proteins` (default 15)
 - place legend on the right side of the figure
 
 ### Clustered heatmap (always)
@@ -193,7 +193,7 @@ File: `<outdir>/binf_<protein>_nt_support_heatmap.png`
 - rows: `binf` loci
 - columns: nucleotide positions from `-window..+window`
 - values: merged support score at each relative nucleotide offset for the selected protein
-- pre-filter rows: keep loci with `sum(across nt positions) >= 25` for the selected protein
+- pre-filter rows: keep loci with `sum(across nt positions) >= 10` for the selected protein
 - hierarchical clustering: rows and columns (row clustering is done after filtering)
 
 ### Summary table (optional)

@@ -18,7 +18,7 @@ from scipy.spatial.distance import pdist
 
 DEFAULT_GENOME = "/camp/home/jonesm6/home/shared/genomes/hg38/hg38.genome"
 HEATMAP_TOP_PROTEINS = 100
-METAPROFILE_TOP_PROTEINS = 10
+METAPROFILE_TOP_PROTEINS = 15
 
 def parse_args():
     p = argparse.ArgumentParser(description="Intersect inference BED with multiple crosslink types and summarize")
@@ -849,11 +849,11 @@ def main():
                 raise ValueError(f"Protein '{args.inspect_protein}' not found. Available proteins: {available}")
             nt_offsets = np.arange(-args.window, args.window + 1, dtype=np.int64)
             inspect_totals = inspect_counts_matrix.sum(axis=1)
-            inspect_keep_mask = inspect_totals >= 25
+            inspect_keep_mask = inspect_totals >= 10
             inspect_counts_filtered = inspect_counts_matrix[inspect_keep_mask, :]
             inspect_counts_log = np.log1p(inspect_counts_filtered)
             print(
-                f"{args.inspect_protein} inspect heatmap row filter (sum across nt >= 25): "
+                f"{args.inspect_protein} inspect heatmap row filter (sum across nt >= 10): "
                 f"kept {int(np.sum(inspect_keep_mask))} / {len(inspect_keep_mask)}"
             )
             protein_nt_fig = sns.clustermap(
