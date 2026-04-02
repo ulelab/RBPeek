@@ -22,6 +22,7 @@ python3 scripts/intersect_inference_bed.py \
   --table \
   -o results \
   --cluster-metaprofiles \
-  --cluster-top-proteins 100 \
-  --n-clusters 10 \
-  --tsne
+  --cluster-top-proteins 10 \
+  --n-clusters 25 \
+  --tsne \
+  -i HepG2-PRPF8-eCLIP
