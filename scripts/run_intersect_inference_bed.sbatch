@@ -22,6 +22,6 @@ python3 scripts/intersect_inference_bed.py \
   --table \
   -o results \
   --cluster-metaprofiles \
-  --n-clusters 20 \
+  --n-clusters 10 \
   --tsne \
-  -i K562-PTBP1-eCLIP
+  -i K562-KHSRP-eCLIP

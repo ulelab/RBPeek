@@ -1,0 +1,24 @@
+/camp/home/jonesm6/home/users/jonesm6/software/miniconda3/envs/rbpeek/bin/python
+ok
+/camp/home/jonesm6/home/users/jonesm6/software/miniconda3/envs/rbpeek/lib/python3.12/site-packages/seaborn/matrix.py:560: UserWarning: Clustering large matrix with scipy. Installing `fastcluster` may give better performance.
+  warnings.warn(msg)
+Wrote metaprofile plot to: results/metaprofile.png
+Heatmap/clustering/tSNE use top 100 XL groups by summed total_overlaps (of 297): HepG2-PRPF8-eCLIP, HepG2-GRWD1-eCLIP, K562-KHSRP-eCLIP, HepG2-PTBP1-eCLIP, K562-PTBP1-eCLIP ...
+Global heatmap row filter (sum across all proteins >= 50): kept 3455 / 15172
+Wrote clustered heatmap to: results/binf_support_heatmap.png
+Row cluster sizes (binary k-means, k=10): {1: 159, 2: 879, 3: 168, 4: 257, 5: 111, 6: 187, 7: 303, 8: 626, 9: 254, 10: 511}
+Wrote heatmap cluster assignments to: results/binf_heatmap_clusters.tsv
+Wrote cluster metaprofile plot to: results/metaprofile_cluster_C1.png
+Wrote cluster metaprofile plot to: results/metaprofile_cluster_C2.png
+Wrote cluster metaprofile plot to: results/metaprofile_cluster_C3.png
+Wrote cluster metaprofile plot to: results/metaprofile_cluster_C4.png
+Wrote cluster metaprofile plot to: results/metaprofile_cluster_C5.png
+Wrote cluster metaprofile plot to: results/metaprofile_cluster_C6.png
+Wrote cluster metaprofile plot to: results/metaprofile_cluster_C7.png
+Wrote cluster metaprofile plot to: results/metaprofile_cluster_C8.png
+Wrote cluster metaprofile plot to: results/metaprofile_cluster_C9.png
+Wrote cluster metaprofile plot to: results/metaprofile_cluster_C10.png
+K562-PTBP1-eCLIP inspect heatmap row filter (sum across nt >= 10): kept 61 / 15172
+Wrote protein nucleotide heatmap to: results/binf_K562-PTBP1-eCLIP_nt_support_heatmap.png
+Wrote binf summary table to: results/binf_summary.tsv
+Wrote tSNE plot to: results/binf_summary_tsne.png (perplexity=30.0)
