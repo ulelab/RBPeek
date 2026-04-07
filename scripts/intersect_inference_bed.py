@@ -17,8 +17,8 @@ from scipy.cluster.hierarchy import linkage
 from scipy.spatial.distance import pdist
 
 DEFAULT_GENOME = "/camp/home/jonesm6/home/shared/genomes/hg38/hg38.genome"
-HEATMAP_TOP_PROTEINS = 100
-METAPROFILE_TOP_PROTEINS = 15
+HEATMAP_TOP_PROTEINS = 60
+METAPROFILE_TOP_PROTEINS = 10
 ROW_KMEANS_DEFAULT = 20
 
 def parse_args():
