@@ -101,11 +101,18 @@ column (iCLIP, like THRAP3).
 - **Cell line is confounded with RBP.** THRAP3 is HEK293; the panel is HepG2/K562 eCLIP,
   HeLa iCLIP and PAR-CLIP. There is no HEK293 panel member. Rank RBPs against each other
   rather than reading absolute enrichment.
-- **Expect the metaprofile to centre near -5, not 0.** Panel signal is attributed at panel
-  peak *start*, while anchors are region *midpoints*, and mean peak width is ~11 bp. Verified
-  on a local smoke test (median `max_binding_offset` -4 to -5). It is a uniform convention
-  shift across all 297 columns, not biology. `build_thrap3_inference_bed.py --anchor start`
-  removes it if a 0-centred plot is preferred.
+- **The peak near -5 is half of a symmetric +/-5 doublet, and it is an artefact.**
+  `compute_counts_for_protein` attributes a panel peak's *entire* score to a single offset:
+  its genomic **start** (`intersect_inference_bed.py:345,356`). That is exactly right for the
+  1 nt crosslink sites the script was designed around, but our panel is Clippy *peaks*
+  (mean width ~10 bp), so a peak centred on a THRAP3 anchor lands at offset `-w/2`. The
+  minus-strand flip at `:357` then sends minus-strand loci to `+w/2`, because a peak's
+  genomic start is its 3' end on that strand. Measured on 89,240 real intersections:
+  **+ strand median -5.0, - strand median +5.0**, near-equal counts. The metaprofile
+  x-axis is therefore a distribution of *peak-start positions*, not of crosslinks, and
+  nothing at nucleotide resolution should be read from it.
+  **Fix: rerun against the merged crosslink files** (`eCLIP-merged-xls/*.xl.bed.gz` etc,
+  268 available under `../CLIP`), which are 1 nt so both modes collapse onto 0.
 - **The heatmap row filter is hardcoded** at `sum >= 50` (`intersect_inference_bed.py:704`),
   not the 40 stated in the top-level README. It was tuned against the decoys BED; with 297
   columns over 29,018 THRAP3 loci most rows will pass, so it may need raising to keep the
