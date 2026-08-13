@@ -1,0 +1,21 @@
+/camp/home/jonesm6/home/users/jonesm6/software/miniconda3/envs/rbpeek/bin/python
+ok
+inference loci: 29018
+/camp/home/jonesm6/home/users/jonesm6/software/miniconda3/envs/rbpeek/lib/python3.12/site-packages/seaborn/matrix.py:560: UserWarning: Clustering large matrix with scipy. Installing `fastcluster` may give better performance.
+  warnings.warn(msg)
+Wrote metaprofile plot to: results/thrap3/metaprofile.png
+Heatmap/clustering/tSNE use top 60 XL groups by summed total_overlaps (of 297): K562-HLTF-eCLIP, K562-FUS-eCLIP, K562-UCHL5-eCLIP, K562-BUD13-eCLIP, HepG2-BCLAF1-eCLIP ...
+Global heatmap row filter (sum across all proteins >= 50): kept 25349 / 29018
+Wrote clustered heatmap to: results/thrap3/binf_support_heatmap.png
+Row cluster sizes (binary k-means, k=6): {1: 3642, 2: 4867, 3: 2989, 4: 4284, 5: 4754, 6: 4813}
+Wrote heatmap cluster assignments to: results/thrap3/binf_heatmap_clusters.tsv
+Wrote cluster metaprofile plot to: results/thrap3/metaprofile_cluster_C1.png
+Wrote cluster metaprofile plot to: results/thrap3/metaprofile_cluster_C2.png
+Wrote cluster metaprofile plot to: results/thrap3/metaprofile_cluster_C3.png
+Wrote cluster metaprofile plot to: results/thrap3/metaprofile_cluster_C4.png
+Wrote cluster metaprofile plot to: results/thrap3/metaprofile_cluster_C5.png
+Wrote cluster metaprofile plot to: results/thrap3/metaprofile_cluster_C6.png
+HNRNPC-Hela-iCLIP inspect heatmap row filter (sum across nt >= 10): kept 3554 / 29018
+Wrote protein nucleotide heatmap to: results/thrap3/binf_HNRNPC-Hela-iCLIP_nt_support_heatmap.png
+Wrote binf summary table to: results/thrap3/binf_summary.tsv
+Wrote tSNE plot to: results/thrap3/binf_summary_tsne.png (perplexity=30.0)
