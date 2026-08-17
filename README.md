@@ -73,6 +73,8 @@ python3 scripts/intersect_inference_bed.py \
 - **`-b/--bed`**: inference BED (required)
 - **`--window`**: half-window size (default 100). Output offsets run from \(-window..+window\).
 - **`--gaussian-sigma`**: sigma parameter for Gaussian metaprofile smoothing (default 2.0)
+- **`--panel-anchor`**: `start` (default) or `midpoint` — which point of each `--xldir` interval carries its score. Use `midpoint` whenever the panel holds **peaks** rather than 1 nt crosslink sites; see [Panel anchor](#panel-anchor-start-vs-midpoint) below.
+- **`--protein-nt-heatmap`**: write a **proteins x nucleotide** heatmap of mean support profiles (one row per protein, not per locus)
 - **`--cluster-metaprofiles`**: if set, write one metaprofile plot per heatmap cluster (`metaprofile_cluster_C*.png`)
 - **`--n-clusters`**: number of k-means clusters on the binarized heatmap row matrix (default 20; capped by number of filtered rows)
 - **`--cluster-top-proteins`**: top K XL groups used for heatmap/clustering/tSNE features (default 100)
@@ -124,7 +126,51 @@ Offsets are **strand-aligned**:
 - locus `+`: offset \(=\) `xl_start - locus_start`
 - locus `-`: offset \(=\) `-(xl_start - locus_start)` (so + offsets are always in the locus’ 5'→3' direction)
 
+### Panel anchor: `start` vs `midpoint`
+
+A panel interval's **entire score lands on one offset**, it is not spread across its width.
+Which offset that is comes from `--panel-anchor`.
+
+For the 1 nt crosslink sites this script was designed around, the two settings are
+identical (`start == midpoint` when `end == start + 1`). They diverge as soon as the panel
+holds **peaks**, and the divergence is not a harmless shift:
+
+- a peak of width `w` centred on a `+` strand locus scores at **`-w/2`**
+- the strand flip sends the same peak on a `-` strand locus to **`+w/2`**, because a peak's
+  genomic start is its 3' end there
+
+So real central binding is split into a spurious **`+/-w/2` doublet with a hole at 0**.
+Measured on a panel of Clippy peaks (mean width ~11 bp) against 29,018 centred loci:
+
+| `--panel-anchor` | `+` strand median | `-` strand median | separation |
+|---|---:|---:|---:|
+| `start` | -5.0 | +5.0 | **10.0 nt** |
+| `midpoint` | 0.0 | 0.0 | **0.0 nt** |
+
+**Use `midpoint` for any peak-based panel.** It is a no-op for crosslink input, so it is
+safe to leave on. `start` remains the default only so existing runs reproduce byte for byte.
+
+Note that `max_binding_offset` in the summary table centres a 5 nt sliding window, so it
+carries its own quantisation of a couple of nt independently of this setting.
+
 ## Outputs
+
+### Proteins x nucleotide heatmap (optional)
+
+Enabled by `--protein-nt-heatmap`. File: `<outdir>/protein_nt_metaprofile_heatmap.png`
+
+- rows: the **top K proteins** (`--cluster-top-proteins`), one row per protein
+- columns: nucleotide offsets `-window..+window`
+- values: mean support profile, **row-normalised to each protein's own maximum**, so RBPs
+  are compared by profile *shape* rather than by sequencing depth
+- row clustering: **correlation** distance, average linkage — RBPs group by binding
+  geometry relative to the inference loci; flat profiles are dropped first, since a
+  constant row has undefined correlation
+
+This is the plot to use for positional questions. It is one row per *protein*, so it stays
+legible at any number of loci, unlike `-i/--inspect-protein` which is one row per *locus*
+and whose average-linkage row clustering chains badly on sparse data (a 2-way cut of a
+4,000-row example split 3,999 vs 1).
 
 ### Metaprofile plot (always)
 
@@ -145,7 +191,7 @@ File: `<outdir>/binf_support_heatmap.png`
 - rows: `binf` loci
 - columns: the **top K** XL groups by global total signal from `--cluster-top-proteins` (default 100), not the full protein list
 - values: per-locus total support (`total_overlaps`) transformed by logistic scaling
-- pre-filter rows: keep loci with `sum(total_overlaps across *all* XL groups) >= 40` (filter uses the full table; heatmap columns are still top-K only)
+- pre-filter rows: keep loci with `sum(total_overlaps across *all* XL groups) >= 50` (filter uses the full table; heatmap columns are still top-K only). Note this threshold is hardcoded and was tuned against a ~15k-row inference BED with the full panel — with many columns it is permissive (87% of rows passed on the 29k-row THRAP3 run), so the heatmap can saturate.
 - **row clustering**: build a **binary** matrix over the top-K proteins (`1` if support `> 0` at that locus/protein, else `0`), then **k-means** (`--n-clusters`, default 20) on those binary rows
 - **row order** (no row dendrogram): sort by cluster id (ascending), then by total crosslink support across all proteins (descending) within each cluster
 - **column clustering only**: cosine distance + average linkage between protein columns (computed on the scaled matrix before row reorder; row order does not change column vectors for linkage)

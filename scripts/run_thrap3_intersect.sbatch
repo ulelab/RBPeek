@@ -45,6 +45,13 @@ echo "inference loci: $(wc -l < "$BINF")"
 
 mkdir -p "$OUT"
 
+# --panel-anchor midpoint is REQUIRED for this panel. RBPeekSamplesheet.tsv points at
+# Clippy *peaks* (mean width ~11 bp), and a panel interval's whole score lands on a single
+# offset. Scoring at the interval start therefore puts a centred peak at -w/2 on + strand
+# loci and +w/2 on - strand loci, splitting real central signal into a +/-5 doublet with a
+# hole at 0. Measured on this panel: separation 10.0 nt with start, 0.0 nt with midpoint.
+# If the panel is ever switched to the 1 nt crosslink files (../CLIP/*-merged-xls/), the
+# flag becomes a no-op rather than a problem, since start == midpoint at width 1.
 python3 scripts/intersect_inference_bed.py \
   -x ../CLIP \
   -b "$BINF" \
@@ -53,6 +60,8 @@ python3 scripts/intersect_inference_bed.py \
   --table \
   -o "$OUT" \
   --window 100 \
+  --panel-anchor midpoint \
+  --protein-nt-heatmap \
   --cluster-metaprofiles \
   --n-clusters 6 \
   --cluster-top-proteins 60 \

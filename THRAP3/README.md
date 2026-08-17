@@ -111,8 +111,20 @@ column (iCLIP, like THRAP3).
   **+ strand median -5.0, - strand median +5.0**, near-equal counts. The metaprofile
   x-axis is therefore a distribution of *peak-start positions*, not of crosslinks, and
   nothing at nucleotide resolution should be read from it.
-  **Fix: rerun against the merged crosslink files** (`eCLIP-merged-xls/*.xl.bed.gz` etc,
-  268 available under `../CLIP`), which are 1 nt so both modes collapse onto 0.
+  **Fixed by `--panel-anchor midpoint`**, now set in `run_thrap3_intersect.sbatch`. Scoring
+  each panel interval at its midpoint collapses both modes onto 0: measured strand
+  separation drops from 10.0 nt to 0.0, and the fraction of loci peaking within +/-2 nt
+  goes from 7% to 31%. The flag is a no-op for 1 nt crosslink input, so it is safe to
+  leave on if the panel is later switched to `../CLIP/*-merged-xls/*.xl.bed.gz` (268 files),
+  which remains the better long-term input for nucleotide-resolution questions.
+
+- **Read positional structure off `protein_nt_metaprofile_heatmap.png`, not the
+  `-i/--inspect-protein` plot.** The inspect plot is one row per *locus*, hierarchically
+  clustered with average linkage on sparse data, which chains: a 2-way cut of a 4,000-row
+  reproduction split 3,999 vs 1, so its apparent row groups are not real sub-populations.
+  `--protein-nt-heatmap` is one row per *protein*, row-normalised so RBPs are compared by
+  profile shape rather than sequencing depth, and clustered by profile correlation so RBPs
+  group by binding geometry.
 - **The heatmap row filter is hardcoded** at `sum >= 50` (`intersect_inference_bed.py:704`),
   not the 40 stated in the top-level README. It was tuned against the decoys BED; with 297
   columns over 29,018 THRAP3 loci most rows will pass, so it may need raising to keep the

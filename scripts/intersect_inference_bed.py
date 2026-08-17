@@ -38,6 +38,31 @@ def parse_args():
     p.add_argument("--window", type=int, default=100, help="Half-window size in bp around each inference locus")
     p.add_argument("--gaussian-sigma", type=float, default=2.0, help="Gaussian smoothing sigma for metaprofile")
     p.add_argument(
+        "--panel-anchor",
+        choices=["start", "midpoint"],
+        default="start",
+        help=(
+            "Which point of each --xldir interval carries its score. 'start' (default) is "
+            "correct for 1 nt crosslink sites, where start and midpoint are the same "
+            "position. Use 'midpoint' when the panel holds PEAKS: a peak's whole score is "
+            "deposited on one offset, so scoring at the start puts a peak of width w at "
+            "offset -w/2 on + strand loci and +w/2 on - strand loci (the strand flip turns "
+            "the genomic start into the 3' end), producing a spurious +/-w/2 doublet "
+            "instead of a peak at 0."
+        ),
+    )
+    p.add_argument(
+        "--protein-nt-heatmap",
+        action="store_true",
+        help=(
+            "Write a proteins x nucleotide heatmap of mean support profiles, row-normalised "
+            "so RBPs are compared by profile SHAPE rather than by sequencing depth. Rows are "
+            "clustered by profile correlation, so RBPs group by binding geometry relative to "
+            "the inference loci. Unlike -i/--inspect-protein this is one row per protein "
+            "rather than one row per locus, which stays legible at any number of loci."
+        ),
+    )
+    p.add_argument(
         "--cluster-metaprofiles",
         action="store_true",
         help="If set, write one metaprofile plot per heatmap row cluster.",
@@ -308,12 +333,21 @@ def compute_counts_for_protein(
     binf_index: dict[tuple[str, int, int], list[int]],
     window: int,
     n_binf: int,
+    panel_anchor: str = "start",
 ):
     """
     Build a matrix counts[binf_idx, offset_bin] where:
       offset_bin corresponds to offset in [-window..+window]
-      value = summed crosslink score (merged_xl column 5) at xl_start for that offset
+      value = summed crosslink score (merged_xl column 5) at the interval's anchor for that offset
     Uses strand-aware overlaps (-s) and assigns offsets with strand flipped so that offsets always match the inference BED's 5'->3' direction.
+
+    panel_anchor selects which point of each panel interval carries its score. The whole
+    score lands on ONE offset either way, so the choice matters as soon as intervals are
+    wider than 1 nt: with "start", a width-w peak centred on a locus scores at -w/2 on
+    + strand loci, and the strand flip below sends the same peak to +w/2 on - strand loci
+    (genomic start is the 3' end there), splitting a real central signal into a spurious
+    +/-w/2 doublet. "midpoint" collapses both back onto 0. For true 1 nt crosslink sites
+    the two options are identical, since start == midpoint when end == start + 1.
     """
     L = 2 * window + 1
     counts = np.zeros((n_binf, L), dtype=np.float32)
@@ -343,6 +377,8 @@ def compute_counts_for_protein(
             continue
 
         xl_start = int(cols[1])
+        if panel_anchor == "midpoint":
+            xl_start = (xl_start + int(cols[2])) // 2
         xl_score = float(cols[4])
         binf_chr = cols[6]
         binf_strand = cols[11]
@@ -442,6 +478,7 @@ def plot_cluster_metaprofiles(
     sigma: float,
     metaprofile_top_k: int,
     outdir: Path,
+    panel_anchor: str = "start",
 ) -> None:
     offsets = np.arange(-window, window + 1, dtype=np.int64)
     cluster_masks = {cid: (all_cluster_labels == cid) for cid in cluster_ids_sorted}
@@ -455,6 +492,7 @@ def plot_cluster_metaprofiles(
             binf_index=binf_index,
             window=window,
             n_binf=n_binf,
+            panel_anchor=panel_anchor,
         )
         for cid in cluster_ids_sorted:
             mask = cluster_masks[cid]
@@ -645,6 +683,7 @@ def main():
                 binf_index=binf_index,
                 window=args.window,
                 n_binf=n_binf,
+                panel_anchor=args.panel_anchor,
             )
 
             totals, variance, pearson_median_skew, kurtosis_excess, max_binding_offset = compute_summary_stats(
@@ -831,7 +870,56 @@ def main():
                 sigma=args.gaussian_sigma,
                 metaprofile_top_k=metaprofile_top_k,
                 outdir=outdir,
+                panel_anchor=args.panel_anchor,
             )
+
+        if args.protein_nt_heatmap:
+            # Rows are proteins, not loci, so this stays legible however many loci there
+            # are. meta_profiles already holds each protein's mean support vector, so this
+            # is a reshape rather than another pass over the BEDs.
+            pnt_names = sorted(meta_profile_scores, key=meta_profile_scores.get, reverse=True)[:k_top]
+            pnt_matrix = np.vstack([meta_profiles[pn] for pn in pnt_names])
+            # Row-normalise to each protein's own maximum: without this the plot ranks
+            # proteins by sequencing depth, when the question is the shape of the profile.
+            row_max = pnt_matrix.max(axis=1, keepdims=True)
+            row_max[row_max <= 0] = 1.0
+            pnt_scaled = pnt_matrix / row_max
+            # Correlation distance clusters by profile shape; drop flat rows first, since a
+            # constant profile has undefined correlation and would poison the linkage.
+            varying = pnt_scaled.std(axis=1) > 0
+            n_dropped = int((~varying).sum())
+            if n_dropped:
+                print(f"protein x nt heatmap: dropped {n_dropped} protein(s) with a flat profile")
+            pnt_scaled = pnt_scaled[varying]
+            pnt_names = [n for n, keep in zip(pnt_names, varying) if keep]
+            if pnt_scaled.shape[0] > 1:
+                pnt_linkage = linkage(pdist(pnt_scaled, metric="correlation"), method="average")
+            else:
+                pnt_linkage = None
+            pnt_fig = sns.clustermap(
+                pnt_scaled,
+                row_linkage=pnt_linkage,
+                row_cluster=pnt_linkage is not None,
+                col_cluster=False,
+                cmap="magma",
+                xticklabels=max(1, (2 * args.window + 1) // 20),
+                yticklabels=pnt_names,
+                figsize=(12, max(6, 0.18 * len(pnt_names))),
+                cbar_kws={"label": "mean support\n(row-normalised)"},
+            )
+            pnt_fig.ax_heatmap.set_xticklabels(
+                [t.get_text() for t in pnt_fig.ax_heatmap.get_xticklabels()], rotation=90, fontsize=7
+            )
+            # x tick positions are matrix columns; relabel them as offsets.
+            xt = pnt_fig.ax_heatmap.get_xticks()
+            pnt_fig.ax_heatmap.set_xticklabels([f"{int(x) - args.window}" for x in xt], rotation=90, fontsize=7)
+            pnt_fig.ax_heatmap.set_xlabel("Nucleotide position relative to inference locus")
+            pnt_fig.ax_heatmap.set_ylabel("Protein")
+            pnt_fig.ax_heatmap.tick_params(axis="y", labelsize=6)
+            pnt_path = outdir / "protein_nt_metaprofile_heatmap.png"
+            pnt_fig.savefig(pnt_path, dpi=200)
+            plt.close(pnt_fig.fig)
+            print(f"Wrote protein x nucleotide heatmap to: {pnt_path} ({pnt_scaled.shape[0]} proteins)")
 
         if args.inspect_protein is not None:
             if inspect_counts_matrix is None:
