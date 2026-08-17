@@ -1,0 +1,45 @@
+/camp/home/jonesm6/home/users/jonesm6/software/miniconda3/envs/rbpeek/bin/python
+ok
+inference loci: 29018
+/camp/home/jonesm6/home/users/jonesm6/software/miniconda3/envs/rbpeek/lib/python3.12/site-packages/seaborn/matrix.py:560: UserWarning: Clustering large matrix with scipy. Installing `fastcluster` may give better performance.
+  warnings.warn(msg)
+Wrote metaprofile plot to: results/thrap3/metaprofile.png
+Enrichment ranking: 32 of 297 proteins excluded (summed total_overlaps < 100 or fewer than 500 loci with signal)
+Heatmap/clustering/tSNE use top 20 XL groups by fraction of loci peaking within +/-5nt (of 297): HepG2-HNRNPC-eCLIP, HNRNPC-Hela-iCLIP, HepG2-STAU2-eCLIP, K562-TROVE2-eCLIP, HepG2-POLR2G-eCLIP ...
+  selected columns (frac centred, loci with signal, summed total_overlaps):
+    HepG2-HNRNPC-eCLIP                       frac centred=+0.380  loci=  7968  total=786,072
+    HNRNPC-Hela-iCLIP                        frac centred=+0.358  loci=  5228  total=391,711
+    HepG2-STAU2-eCLIP                        frac centred=+0.326  loci=  4753  total=602,243
+    K562-TROVE2-eCLIP                        frac centred=+0.306  loci=  7924  total=1,919,485
+    HepG2-POLR2G-eCLIP                       frac centred=+0.303  loci=  4911  total=710,881
+    K562-WRN-eCLIP                           frac centred=+0.303  loci=  3153  total=407,337
+    HepG2-DDX52-eCLIP                        frac centred=+0.303  loci=  5898  total=1,200,770
+    K562-MATR3-eCLIP                         frac centred=+0.301  loci=  1682  total=247,325
+    HepG2-SUGP2-eCLIP                        frac centred=+0.300  loci=  4991  total=708,941
+    K562-DDX52-eCLIP                         frac centred=+0.297  loci=  4725  total=697,045
+    HepG2-FUBP3-eCLIP                        frac centred=+0.297  loci=  3057  total=250,054
+    K562-SAFB-eCLIP                          frac centred=+0.294  loci= 17960  total=3,796,035
+    K562-ILF3-eCLIP                          frac centred=+0.292  loci=  6745  total=674,717
+    HepG2-TROVE2-eCLIP                       frac centred=+0.289  loci=  7827  total=1,789,150
+    K562-EXOSC5-eCLIP                        frac centred=+0.288  loci=  5000  total=652,915
+    HepG2-BCLAF1-eCLIP                       frac centred=+0.288  loci= 20397  total=4,585,246
+    K562-BUD13-eCLIP                         frac centred=+0.285  loci= 20644  total=4,667,975
+    K562-DROSHA-eCLIP                        frac centred=+0.285  loci=  9243  total=1,112,475
+    K562-HNRNPL-eCLIP                        frac centred=+0.284  loci=  9135  total=2,447,140
+    HepG2-SAFB-eCLIP                         frac centred=+0.284  loci= 12167  total=2,753,126
+Global heatmap row filter (sum across all proteins >= 200): kept 22710 / 29018 (78.3%)
+Heatmap colour scale: percentile (clip at 99th of non-zero), 65.0% of cells empty, 0.35% saturated at 1.0
+Wrote clustered heatmap to: results/thrap3/binf_support_heatmap.png
+Row cluster sizes (binary k-means, k=6): {1: 7611, 2: 3372, 3: 2495, 4: 4762, 5: 2372, 6: 2098}
+Wrote heatmap cluster assignments to: results/thrap3/binf_heatmap_clusters.tsv
+Wrote cluster metaprofile plot to: results/thrap3/metaprofile_cluster_C1.png
+Wrote cluster metaprofile plot to: results/thrap3/metaprofile_cluster_C2.png
+Wrote cluster metaprofile plot to: results/thrap3/metaprofile_cluster_C3.png
+Wrote cluster metaprofile plot to: results/thrap3/metaprofile_cluster_C4.png
+Wrote cluster metaprofile plot to: results/thrap3/metaprofile_cluster_C5.png
+Wrote cluster metaprofile plot to: results/thrap3/metaprofile_cluster_C6.png
+Wrote protein x nucleotide heatmap to: results/thrap3/protein_nt_metaprofile_heatmap.png (20 proteins)
+HNRNPC-Hela-iCLIP inspect heatmap row filter (sum across nt >= 10): kept 3552 / 29018
+Wrote protein nucleotide heatmap to: results/thrap3/binf_HNRNPC-Hela-iCLIP_nt_support_heatmap.png
+Wrote binf summary table to: results/thrap3/binf_summary.tsv
+Wrote tSNE plot to: results/thrap3/binf_summary_tsne.png (perplexity=30.0)

@@ -111,7 +111,6 @@ python3 scripts/intersect_inference_bed.py \
   --enrichment-window 5 \
   --centrality-min-total 100 \
   --protein-min-loci 500 \
-  --exclude-groups PARCLIP \
   --heatmap-min-support 200 \
   --heatmap-scale percentile \
   --heatmap-scale-percentile 99 \
