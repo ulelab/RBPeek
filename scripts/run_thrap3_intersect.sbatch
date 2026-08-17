@@ -72,7 +72,12 @@ mkdir -p "$OUT"
 # Raising it does NOT fix the dark heatmap. That comes from logistic_scale() centring on the
 # matrix median, which is ~0 for a sparse matrix, so every empty cell renders at exactly 0.5
 # and the whole palette below 0.5 goes unused - which is why the last run's colourbar
-# started at 0.5. That needs a scaling change, not a row cull.
+# started at 0.5. --heatmap-scale percentile is the actual fix: it log1p's the matrix and
+# scales against the 99th percentile of non-zero cells, so empty cells sit at 0 and the full
+# palette carries signal. On a sparse test matrix (65% empty): logistic gave range
+# [0.50,1.00] with empty cells at 0.50; percentile gave [0.00,1.00] with empty cells at 0.00
+# and the median non-zero cell at 0.53. The log1p step matters - support counts are
+# heavy-tailed, and without it the median non-zero cell rendered at 0.11, darker than before.
 #
 # Nothing is lost either way: binf_summary.tsv and binf_heatmap_clusters.tsv keep all 29,018
 # loci with a passes_heatmap_filter flag, and the metaprofile, the proteins x nt heatmap and
@@ -91,6 +96,8 @@ python3 scripts/intersect_inference_bed.py \
   --centrality-sigma 5 \
   --centrality-min-total 100 \
   --heatmap-min-support 200 \
+  --heatmap-scale percentile \
+  --heatmap-scale-percentile 99 \
   --cluster-metaprofiles \
   --n-clusters 6 \
   --cluster-top-proteins 20 \

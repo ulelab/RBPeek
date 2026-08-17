@@ -76,6 +76,8 @@ python3 scripts/intersect_inference_bed.py \
 - **`--panel-anchor`**: `start` (default) or `midpoint` — which point of each `--xldir` interval carries its score. Use `midpoint` whenever the panel holds **peaks** rather than 1 nt crosslink sites; see [Panel anchor](#panel-anchor-start-vs-midpoint) below.
 - **`--protein-nt-heatmap`**: write a **proteins x nucleotide** heatmap of mean support profiles (one row per protein, not per locus)
 - **`--heatmap-min-support`**: minimum summed support across **all** xl groups for a locus to enter the heatmap/clustering (default 50, previously hardcoded). Scales with panel width, so raise it for wide panels — see the note under the clustered heatmap.
+- **`--heatmap-scale`**: `logistic` (default) or `percentile` — colour scaling for the clustered heatmap; see [Heatmap colour scaling](#heatmap-colour-scaling) below.
+- **`--heatmap-scale-percentile`**: percentile of non-zero values mapped to the top of the colour range under `--heatmap-scale percentile` (default 99.0)
 - **`--protein-select`**: `total` (default) or `centrality` — how the top-K columns are chosen; see [Protein selection](#protein-selection-total-vs-centrality) below.
 - **`--centrality-sigma`**: width (nt) of the Gaussian template for centrality ranking (default 5.0)
 - **`--centrality-min-total`**: minimum summed `total_overlaps` for a protein to be eligible under centrality ranking (default 100)
@@ -156,6 +158,40 @@ safe to leave on. `start` remains the default only so existing runs reproduce by
 
 Note that `max_binding_offset` in the summary table centres a 5 nt sliding window, so it
 carries its own quantisation of a couple of nt independently of this setting.
+
+### Heatmap colour scaling
+
+`logistic` (default) centres on the matrix **median**. The locus x protein matrix is sparse,
+so that median is ~0 and **every empty cell maps to exactly 0.5** — mid-palette. The whole
+range below 0.5 goes unused and the colourbar starts at 0.5, which is why a sparse run looks
+uniformly flat no matter how the row filter is set.
+
+`percentile` applies `log1p`, then scales against the given percentile of the **non-zero**
+values and clips. Empty cells stay at 0, so the full palette carries signal. On a sparse test
+matrix (65% of cells empty):
+
+| scaling | range | empty cells render at | median non-zero cell |
+|---|---|---:|---:|
+| `logistic` | 0.50 – 1.00 | 0.50 | 0.67 |
+| `percentile` (log1p, 99th) | 0.00 – 1.00 | 0.00 | 0.53 |
+
+The `log1p` step is what makes this usable rather than merely correct. Support counts are
+heavy-tailed — non-zero median 10 against a maximum of 333 on that matrix — so scaling raw
+values against the 99th percentile put the median cell at **0.11**, *darker* than the
+logistic scaling it replaces. After `log1p` the same settings put it at 0.53.
+
+Two things this also affects:
+
+- the **column dendrogram**, built from cosine distances on the scaled matrix. Under
+  `logistic` every column carries a large constant 0.5 component from its empty cells, which
+  compresses the distances between them; under `percentile` the distances reflect actual
+  co-occurrence.
+- **not** the row clusters, which come from `(matrix > 0)` binarisation and are unaffected by
+  any colour scaling.
+
+Raising `--heatmap-min-support` is *not* an alternative fix. It culls rows rather than
+rescaling colour, and because row support correlates with inference-BED reproducibility it
+biases which loci survive.
 
 ### Protein selection: `total` vs `centrality`
 

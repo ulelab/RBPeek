@@ -52,6 +52,30 @@ def parse_args():
         ),
     )
     p.add_argument(
+        "--heatmap-scale",
+        choices=["logistic", "percentile"],
+        default="logistic",
+        help=(
+            "Colour scaling for the clustered locus x protein heatmap. 'logistic' (default) "
+            "centres on the matrix median, which is ~0 on a sparse matrix, so every empty "
+            "cell lands at exactly 0.5 and the palette below 0.5 goes unused. 'percentile' "
+            "applies log1p, then scales against a high percentile of the non-zero values and "
+            "clips, leaving empty cells at 0 so the full range carries signal. This also "
+            "affects the column dendrogram, which is built from cosine distances on the "
+            "scaled matrix."
+        ),
+    )
+    p.add_argument(
+        "--heatmap-scale-percentile",
+        type=float,
+        default=99.0,
+        help=(
+            "Percentile of non-zero values mapped to the top of the colour range under "
+            "--heatmap-scale percentile (default 99). Lower it if the heatmap still looks "
+            "dark, raise it if a few cells dominate."
+        ),
+    )
+    p.add_argument(
         "--protein-select",
         choices=["total", "centrality"],
         default="total",
@@ -554,12 +578,45 @@ def centrality_rank(
 
 def logistic_scale(matrix: np.ndarray) -> np.ndarray:
     # Logistic scaling after robust centering/scaling to compress large dynamic range.
+    #
+    # Note this centres on the matrix median, which is ~0 whenever the matrix is sparse.
+    # Every empty cell then maps to exactly 0.5, so half the palette is never used and the
+    # colourbar starts at 0.5 rather than 0. See percentile_scale for the alternative.
     center = float(np.median(matrix))
     spread = float(np.std(matrix))
     if spread <= 0:
         spread = 1.0
     z = (matrix - center) / spread
     return 1.0 / (1.0 + np.exp(-z))
+
+
+def percentile_scale(matrix: np.ndarray, pct: float) -> np.ndarray:
+    """
+    log1p the matrix, then scale to [0, 1] against a high percentile of the NON-ZERO values.
+
+    Empty cells stay at 0 rather than being pushed to mid-palette, so the whole colour range
+    carries signal. The percentile is taken over non-zero values because on a sparse matrix
+    a percentile over all cells is itself 0, which collapses the scale.
+
+    The log1p step is what makes this usable rather than merely correct. Support counts are
+    heavy-tailed: on a representative matrix the non-zero median was 10 against a maximum of
+    333, so dividing raw values by the 99th percentile rendered the median cell at 0.11 and
+    left the heatmap darker than the logistic scaling it replaced. After log1p the same
+    settings put the median cell at 0.53, with ~59% of non-zero cells above mid-palette.
+
+    Clipping at pct rather than the maximum keeps a handful of very large cells from
+    compressing everything else; cells above the percentile saturate at 1.0.
+    """
+    dense = np.log1p(np.clip(matrix.astype(np.float64), 0.0, None))
+    nonzero = dense[dense > 0]
+    if nonzero.size == 0:
+        return np.zeros_like(dense)
+    hi = float(np.percentile(nonzero, pct))
+    if hi <= 0:
+        hi = float(nonzero.max())
+    if hi <= 0:
+        return np.zeros_like(dense)
+    return np.clip(dense / hi, 0.0, 1.0)
 
 
 def plot_cluster_metaprofiles(
@@ -880,7 +937,16 @@ def main():
             )
 
         # Logistic-scale for heatmap display; k-means clustering uses binarized presence/absence.
-        heatmap_matrix_scaled = logistic_scale(heatmap_matrix_filtered)
+        if args.heatmap_scale == "percentile":
+            heatmap_matrix_scaled = percentile_scale(heatmap_matrix_filtered, args.heatmap_scale_percentile)
+            frac_saturated = float(np.mean(heatmap_matrix_scaled >= 1.0))
+            print(
+                f"Heatmap colour scale: percentile (clip at {args.heatmap_scale_percentile:g}th of "
+                f"non-zero), {100 * float(np.mean(heatmap_matrix_filtered == 0)):.1f}% of cells empty, "
+                f"{100 * frac_saturated:.2f}% saturated at 1.0"
+            )
+        else:
+            heatmap_matrix_scaled = logistic_scale(heatmap_matrix_filtered)
         n_filt = heatmap_matrix_scaled.shape[0]
         binary_rows = (heatmap_matrix_filtered > 0.0).astype(np.float64)
 
@@ -919,6 +985,14 @@ def main():
         cluster_to_color = {cid: cluster_palette[i] for i, cid in enumerate(cluster_ids_sorted)}
         row_colors = [cluster_to_color[int(cid)] for cid in row_clusters_sorted]
 
+        if args.heatmap_scale == "percentile":
+            cbar_label = f"log1p support (clipped at {args.heatmap_scale_percentile:g}th pct)"
+            # Pin the range so empty cells read as the bottom of the palette rather than
+            # being stretched by whatever the observed minimum happens to be.
+            scale_kwargs = {"vmin": 0.0, "vmax": 1.0}
+        else:
+            cbar_label = "support (logistic; empty = 0.5)"
+            scale_kwargs = {}
         heatmap_fig = sns.clustermap(
             heatmap_display,
             row_cluster=False,
@@ -929,6 +1003,8 @@ def main():
             xticklabels=cluster_protein_names,
             yticklabels=False,
             figsize=(9, 10),
+            cbar_kws={"label": cbar_label},
+            **scale_kwargs,
         )
         heatmap_fig.ax_heatmap.set_xlabel("Proteins")
         heatmap_fig.ax_heatmap.set_ylabel("Inference BED loci")
