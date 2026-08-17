@@ -77,16 +77,38 @@ def parse_args():
     )
     p.add_argument(
         "--protein-select",
-        choices=["total", "centrality"],
+        choices=["total", "centrality", "enrichment"],
         default="total",
         help=(
             "How the top-K panel columns are chosen for the heatmap, clustering, tSNE and "
             "the proteins x nt heatmap. 'total' (default) ranks by summed total_overlaps, "
-            "which tracks sequencing depth and genome-wide peak count as much as any "
-            "relationship to the inference loci. 'centrality' ranks by Pearson correlation "
-            "of each protein's mean profile against a Gaussian centred on the locus, which "
-            "is scale-free, so a shallow dataset with sharply centred binding can outrank a "
-            "deep one with a flat profile."
+            "which tracks sequencing depth as much as any relationship to the inference "
+            "loci. 'enrichment' (recommended) ranks by the fraction of a protein's "
+            "signal-bearing loci whose strongest binding lands within --enrichment-window "
+            "of the locus. 'centrality' ranks by Pearson correlation of the mean profile "
+            "against a centred Gaussian; on a centred panel this ends up scoring baseline "
+            "tidiness rather than position, which biases towards low-background assays - "
+            "prefer 'enrichment'."
+        ),
+    )
+    p.add_argument(
+        "--enrichment-window",
+        type=int,
+        default=5,
+        help=(
+            "Half-width (nt) counted as 'on the locus' by --protein-select enrichment "
+            "(default 5). A locus counts towards a protein's score when that protein's "
+            "max_binding_offset there is within +/- this many nt."
+        ),
+    )
+    p.add_argument(
+        "--protein-min-loci",
+        type=int,
+        default=500,
+        help=(
+            "Minimum number of loci with any signal for a protein to be eligible under "
+            "--protein-select enrichment or centrality (default 500). Without this the "
+            "enrichment fraction is trivially 1.0 for a protein touching a single locus."
         ),
     )
     p.add_argument(
@@ -108,6 +130,16 @@ def parse_args():
             "--protein-select centrality (default 100). Guards against a protein whose "
             "profile rests on a handful of overlaps scoring a near perfect correlation from "
             "a single spike at 0. Raise it if the selected columns look sparse."
+        ),
+    )
+    p.add_argument(
+        "--exclude-groups",
+        default=None,
+        help=(
+            "Comma-separated substrings; any panel column whose group name contains one is "
+            "dropped before anything is computed. E.g. --exclude-groups PARCLIP. Note this "
+            "removes those columns from the row-support sums behind --heatmap-min-support "
+            "as well, so that threshold may need retuning alongside it."
         ),
     )
     p.add_argument(
@@ -576,6 +608,51 @@ def centrality_rank(
     return ranked, scores, excluded
 
 
+def enrichment_rank(
+    protein_names: list[str],
+    totals_by_protein: dict[str, np.ndarray],
+    maxoff_by_protein: dict[str, np.ndarray],
+    win: int,
+    min_total: float,
+    min_loci: int,
+) -> tuple[list[str], dict[str, float], list[str]]:
+    """
+    Rank proteins by the fraction of their signal-bearing loci whose strongest binding falls
+    within +/-win nt of the inference locus.
+
+    This is a PER-LOCUS measure, which is what makes it behave differently from
+    centrality_rank's correlation against the mean profile. Once the panel is centred with
+    --panel-anchor midpoint, nearly every mean profile peaks at 0, so correlation against a
+    centred template stops discriminating on position and starts discriminating on how tidy
+    a dataset's baseline is. That favours assays with low background: on the THRAP3 panel it
+    put PAR-CLIP at 2.2x its share of the panel and dropped BCLAF1, THRAP3's known complex
+    partner, out of the top 20 entirely. Asking instead "at what fraction of loci does this
+    protein actually peak on the locus" is insensitive to baseline texture. On the same data
+    it returned 19 eCLIP + 1 iCLIP, matching panel composition, with both HNRNPC datasets
+    first and second and BCLAF1 back inside the top 20.
+
+    Both gates matter. Without min_loci the metric is trivially 1.0 for a protein whose
+    signal touches a single locus: the raw top of this ranking was a PAR-CLIP column with
+    one locus and a summed score of 5.
+
+    Returns (ranked_names, scores, excluded_names).
+    """
+    scores: dict[str, float] = {}
+    excluded: list[str] = []
+    for pn in protein_names:
+        totals = np.asarray(totals_by_protein[pn])
+        has_signal = totals > 0
+        n_loci = int(has_signal.sum())
+        if float(totals.sum()) < min_total or n_loci < min_loci:
+            excluded.append(pn)
+            continue
+        offs = np.asarray(maxoff_by_protein[pn])[has_signal]
+        scores[pn] = float(np.mean(np.abs(offs) <= win))
+
+    ranked = sorted(scores, key=scores.get, reverse=True)
+    return ranked, scores, excluded
+
+
 def logistic_scale(matrix: np.ndarray) -> np.ndarray:
     # Logistic scaling after robust centering/scaling to compress large dynamic range.
     #
@@ -800,6 +877,18 @@ def main():
             merged_sources.append((protein_dir.name, merge_protein_crosslinks(protein_dir, merged_dir=merged_dir)))
         protein_sources = uniquify_names(merged_sources)
 
+    if args.exclude_groups:
+        patterns = [p.strip() for p in args.exclude_groups.split(",") if p.strip()]
+        before = len(protein_sources)
+        dropped_names = [n for n, _ in protein_sources if any(p in n for p in patterns)]
+        protein_sources = [(n, p) for n, p in protein_sources if not any(pat in n for pat in patterns)]
+        if not protein_sources:
+            raise ValueError(f"--exclude-groups {args.exclude_groups!r} removed every panel column.")
+        print(
+            f"Excluded {before - len(protein_sources)} of {before} panel columns matching "
+            f"{patterns}: {', '.join(dropped_names[:5])}" + (" ..." if len(dropped_names) > 5 else "")
+        )
+
     protein_names = [name for name, _ in protein_sources]
     metaprofile_top_k = min(args.metaprofile_top_proteins, len(protein_names))
 
@@ -875,7 +964,29 @@ def main():
         plt.close()
 
         # Heatmap: rank proteins, keep top-K for clustering/tSNE.
-        if args.protein_select == "centrality":
+        if args.protein_select == "enrichment":
+            protein_signal_rank, centrality_scores, centrality_excluded = enrichment_rank(
+                protein_names=protein_names,
+                totals_by_protein=totals_by_protein,
+                maxoff_by_protein=maxoff_by_protein,
+                win=args.enrichment_window,
+                min_total=args.centrality_min_total,
+                min_loci=args.protein_min_loci,
+            )
+            if not protein_signal_rank:
+                raise ValueError(
+                    f"No protein passed --centrality-min-total {args.centrality_min_total:g} "
+                    f"and --protein-min-loci {args.protein_min_loci}. Lower them, or use "
+                    "--protein-select total."
+                )
+            if centrality_excluded:
+                print(
+                    f"Enrichment ranking: {len(centrality_excluded)} of {len(protein_names)} "
+                    f"proteins excluded (summed total_overlaps < {args.centrality_min_total:g} "
+                    f"or fewer than {args.protein_min_loci} loci with signal)"
+                )
+            rank_desc = f"fraction of loci peaking within +/-{args.enrichment_window}nt"
+        elif args.protein_select == "centrality":
             protein_signal_rank, centrality_scores, centrality_excluded = centrality_rank(
                 protein_names=protein_names,
                 meta_profiles=meta_profiles,
@@ -912,12 +1023,17 @@ def main():
             f"(of {len(protein_names)}): {', '.join(cluster_protein_names[:5])}"
             + (" ..." if k_top > 5 else "")
         )
+        score_label = "frac centred" if args.protein_select == "enrichment" else "centrality r"
         if centrality_scores is not None:
             # Print the selected columns with both scores, so a high-r/low-signal column is
             # obvious rather than silently shaping the heatmap.
-            print("  selected columns (centrality r, summed total_overlaps):")
+            print(f"  selected columns ({score_label}, loci with signal, summed total_overlaps):")
             for pn in cluster_protein_names:
-                print(f"    {pn:40} r={centrality_scores[pn]:+.3f}  total={float(np.sum(totals_by_protein[pn])):,.0f}")
+                totals = np.asarray(totals_by_protein[pn])
+                print(
+                    f"    {pn:40} {score_label}={centrality_scores[pn]:+.3f}  "
+                    f"loci={int((totals > 0).sum()):>6}  total={float(totals.sum()):,.0f}"
+                )
 
         heatmap_matrix = np.column_stack([totals_by_protein[pn] for pn in cluster_protein_names])
         # Filter out low-support rows for stable clustering (sum across all proteins in full table).

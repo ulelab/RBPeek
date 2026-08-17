@@ -78,9 +78,12 @@ python3 scripts/intersect_inference_bed.py \
 - **`--heatmap-min-support`**: minimum summed support across **all** xl groups for a locus to enter the heatmap/clustering (default 50, previously hardcoded). Scales with panel width, so raise it for wide panels — see the note under the clustered heatmap.
 - **`--heatmap-scale`**: `logistic` (default) or `percentile` — colour scaling for the clustered heatmap; see [Heatmap colour scaling](#heatmap-colour-scaling) below.
 - **`--heatmap-scale-percentile`**: percentile of non-zero values mapped to the top of the colour range under `--heatmap-scale percentile` (default 99.0)
-- **`--protein-select`**: `total` (default) or `centrality` — how the top-K columns are chosen; see [Protein selection](#protein-selection-total-vs-centrality) below.
+- **`--protein-select`**: `total` (default), `enrichment` (recommended) or `centrality` — how the top-K columns are chosen; see [Protein selection](#protein-selection-total-vs-centrality) below.
+- **`--enrichment-window`**: half-width (nt) counted as "on the locus" by `enrichment` ranking (default 5)
+- **`--protein-min-loci`**: minimum loci with signal for a protein to be eligible under `enrichment`/`centrality` (default 500)
 - **`--centrality-sigma`**: width (nt) of the Gaussian template for centrality ranking (default 5.0)
 - **`--centrality-min-total`**: minimum summed `total_overlaps` for a protein to be eligible under centrality ranking (default 100)
+- **`--exclude-groups`**: comma-separated substrings; panel columns whose group name contains one are dropped before anything is computed (e.g. `--exclude-groups PARCLIP`)
 - **`--cluster-metaprofiles`**: if set, write one metaprofile plot per heatmap cluster (`metaprofile_cluster_C*.png`)
 - **`--n-clusters`**: number of k-means clusters on the binarized heatmap row matrix (default 20; capped by number of filtered rows)
 - **`--cluster-top-proteins`**: top K XL groups used for heatmap/clustering/tSNE features (default 100)
@@ -205,6 +208,30 @@ to do with the inference loci.
 `centrality` ranks by Pearson r between each protein's mean profile and a Gaussian of width
 `--centrality-sigma` centred on the locus. Pearson r is **scale-free**, so a shallow dataset
 with sharply centred binding can outrank a deep one with a flat profile.
+
+`enrichment` (**recommended**) is also depth-free but works **per locus**: for each protein,
+the fraction of its signal-bearing loci whose `max_binding_offset` falls within
+`--enrichment-window`. Prefer it over `centrality` — see below for why.
+
+#### Why `enrichment` over `centrality`
+
+Once the panel is centred with `--panel-anchor midpoint`, nearly every mean profile peaks at
+0, so correlating against a centred template stops discriminating on **position** and starts
+discriminating on how tidy a dataset's **baseline** is. That systematically favours assays
+with low background. Measured on a 297-column run:
+
+| | `centrality` | `enrichment` |
+|---|---|---|
+| assay mix of top 20 | 10 PAR-CLIP / 9 eCLIP / 1 iCLIP | 19 eCLIP / 1 iCLIP |
+| vs panel composition (75% eCLIP, 23% PAR-CLIP) | PAR-CLIP **2.2x** enriched | matches |
+| BCLAF1 (known complex partner of the bait) | **absent from top 20** | 16th |
+| top-ranked columns | ORF1/L1RE1-PARCLIP (LINE-1, repeat-derived) | both HNRNPC datasets |
+
+The two rankings shared **zero** of their top 20 on the same data.
+
+`--protein-min-loci` is load-bearing for `enrichment`: the fraction is trivially 1.0 for a
+protein whose signal touches a single locus. Ungated, the top of that ranking was a PAR-CLIP
+column with one locus and a summed score of 5.
 
 Validated against two decoys built from a real replicate at matched depth — one displaced
 40 nt, one with positions jittered +/-80 nt:

@@ -53,12 +53,27 @@ mkdir -p "$OUT"
 # If the panel is ever switched to the 1 nt crosslink files (../CLIP/*-merged-xls/), the
 # flag becomes a no-op rather than a problem, since start == midpoint at width 1.
 #
-# --protein-select centrality replaces depth ranking. Ranking by summed total_overlaps put
-# peak-rich datasets at the top whether or not their binding relates to THRAP3: in a
-# controlled test, a decoy displaced 40 nt and a decoy with jittered positions both ranked
-# above genuine replicates purely on depth. Under centrality every genuine replicate
-# outranked both decoys, including one at a quarter of their depth, and the 40 nt decoy
-# scored r=-0.003.
+# --protein-select enrichment, NOT centrality. Both are depth-free, but centrality scores
+# Pearson r of the mean profile against a centred Gaussian, and once --panel-anchor midpoint
+# centres everything that stops discriminating on position and starts discriminating on how
+# tidy a dataset's baseline is. On run 52005272 that put PAR-CLIP at 2.2x its share of the
+# panel and pushed HepG2-BCLAF1-eCLIP - THRAP3's known complex partner and the tallest curve
+# in the metaprofile - out of the top 20 entirely.
+#
+# enrichment instead asks, per locus, whether the protein's strongest binding lands within
+# --enrichment-window of the THRAP3 site, then takes the fraction of that protein's
+# signal-bearing loci where it does. Recomputed on run 52005272's summary table this gives
+# 19 eCLIP + 1 iCLIP (panel composition is 75/23/2 eCLIP/PAR-CLIP/iCLIP), with
+# HepG2-HNRNPC-eCLIP and HNRNPC-Hela-iCLIP first and second and BCLAF1 back at 16th.
+#
+# --protein-min-loci 500 is load-bearing. The metric is trivially 1.0 for a protein whose
+# signal touches one locus: ungated, the top of this ranking was WDR33-PARCLIP with a single
+# locus and a summed score of 5.
+#
+# --exclude-groups PARCLIP. NOTE this is belt-and-braces, not the fix: recomputed on run
+# 52005272, the best PAR-CLIP column ranks 95th of 293 under enrichment and the top 20 is
+# byte-identical whether PAR-CLIP is kept or dropped. It DOES cost ELAVL1, which exists only
+# as ELAVL1-PARCLIP - drop this one line to keep ELAVL1 in the panel.
 #
 # --heatmap-min-support 200, deliberately low. This filter is NOT a peak count: row support
 # is the summed SCORE column of every overlapping panel interval across all 297 columns and
@@ -92,9 +107,11 @@ python3 scripts/intersect_inference_bed.py \
   --window 100 \
   --panel-anchor midpoint \
   --protein-nt-heatmap \
-  --protein-select centrality \
-  --centrality-sigma 5 \
+  --protein-select enrichment \
+  --enrichment-window 5 \
   --centrality-min-total 100 \
+  --protein-min-loci 500 \
+  --exclude-groups PARCLIP \
   --heatmap-min-support 200 \
   --heatmap-scale percentile \
   --heatmap-scale-percentile 99 \
