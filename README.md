@@ -76,6 +76,9 @@ python3 scripts/intersect_inference_bed.py \
 - **`--panel-anchor`**: `start` (default) or `midpoint` — which point of each `--xldir` interval carries its score. Use `midpoint` whenever the panel holds **peaks** rather than 1 nt crosslink sites; see [Panel anchor](#panel-anchor-start-vs-midpoint) below.
 - **`--protein-nt-heatmap`**: write a **proteins x nucleotide** heatmap of mean support profiles (one row per protein, not per locus)
 - **`--heatmap-min-support`**: minimum summed support across **all** xl groups for a locus to enter the heatmap/clustering (default 50, previously hardcoded). Scales with panel width, so raise it for wide panels — see the note under the clustered heatmap.
+- **`--protein-select`**: `total` (default) or `centrality` — how the top-K columns are chosen; see [Protein selection](#protein-selection-total-vs-centrality) below.
+- **`--centrality-sigma`**: width (nt) of the Gaussian template for centrality ranking (default 5.0)
+- **`--centrality-min-total`**: minimum summed `total_overlaps` for a protein to be eligible under centrality ranking (default 100)
 - **`--cluster-metaprofiles`**: if set, write one metaprofile plot per heatmap cluster (`metaprofile_cluster_C*.png`)
 - **`--n-clusters`**: number of k-means clusters on the binarized heatmap row matrix (default 20; capped by number of filtered rows)
 - **`--cluster-top-proteins`**: top K XL groups used for heatmap/clustering/tSNE features (default 100)
@@ -153,6 +156,42 @@ safe to leave on. `start` remains the default only so existing runs reproduce by
 
 Note that `max_binding_offset` in the summary table centres a 5 nt sliding window, so it
 carries its own quantisation of a couple of nt independently of this setting.
+
+### Protein selection: `total` vs `centrality`
+
+`--cluster-top-proteins K` picks which panel columns reach the heatmap, clustering, tSNE
+and the proteins x nt heatmap. `--protein-select` decides *how* they are picked.
+
+`total` (default) ranks by summed `total_overlaps`. That is a **depth-biased** measure: a
+deeply sequenced, peak-rich dataset scores highly whether or not its binding has anything
+to do with the inference loci.
+
+`centrality` ranks by Pearson r between each protein's mean profile and a Gaussian of width
+`--centrality-sigma` centred on the locus. Pearson r is **scale-free**, so a shallow dataset
+with sharply centred binding can outrank a deep one with a flat profile.
+
+Validated against two decoys built from a real replicate at matched depth — one displaced
+40 nt, one with positions jittered +/-80 nt:
+
+| column | summed overlaps | rank by `total` | centrality r | rank by `centrality` |
+|---|---:|---:|---:|---:|
+| genuine replicate A | 160,016 | 2 | +0.813 | **1** |
+| genuine replicate B | 164,279 | 1 | +0.809 | **2** |
+| genuine replicate C | 104,214 | 5 | +0.808 | **3** |
+| genuine replicate D | 43,386 | 6 | +0.796 | **4** |
+| decoy, jittered | 157,163 | 4 | +0.292 | 5 |
+| decoy, shifted 40 nt | 158,592 | 3 | **-0.003** | 6 |
+
+Under `total` both decoys outrank two genuine replicates on depth alone. Under `centrality`
+every genuine replicate outranks both decoys, including one at a quarter of their depth.
+The jittered decoy retains r=+0.292 because jitter is itself centred, leaving broad central
+enrichment inside the window — a broad hump is genuinely less centred, not a scoring flaw.
+
+Proteins below `--centrality-min-total` are excluded before ranking, since a profile built
+from a handful of overlaps can score a near perfect correlation off a single spike at 0.
+Flat profiles are excluded too, Pearson r being undefined at zero variance. Selected
+columns are logged with both their r and their total, so a high-r/low-signal column is
+visible rather than silently shaping the heatmap.
 
 ## Outputs
 

@@ -52,6 +52,17 @@ mkdir -p "$OUT"
 # hole at 0. Measured on this panel: separation 10.0 nt with start, 0.0 nt with midpoint.
 # If the panel is ever switched to the 1 nt crosslink files (../CLIP/*-merged-xls/), the
 # flag becomes a no-op rather than a problem, since start == midpoint at width 1.
+#
+# --protein-select centrality replaces depth ranking. Ranking by summed total_overlaps put
+# peak-rich datasets at the top whether or not their binding relates to THRAP3: in a
+# controlled test, a decoy displaced 40 nt and a decoy with jittered positions both ranked
+# above genuine replicates purely on depth. Under centrality every genuine replicate
+# outranked both decoys, including one at a quarter of their depth, and the 40 nt decoy
+# scored r=-0.003.
+#
+# --heatmap-min-support 2000 against the default 50. Row support sums over all 297 columns,
+# so the default sat ~20x below this run's median row sum of 1,053 and kept 87% of loci,
+# saturating the heatmap. 2000 keeps 10,220 of 29,018 (35%). Tune from the run log.
 python3 scripts/intersect_inference_bed.py \
   -x ../CLIP \
   -b "$BINF" \
@@ -62,9 +73,13 @@ python3 scripts/intersect_inference_bed.py \
   --window 100 \
   --panel-anchor midpoint \
   --protein-nt-heatmap \
+  --protein-select centrality \
+  --centrality-sigma 5 \
+  --centrality-min-total 100 \
+  --heatmap-min-support 2000 \
   --cluster-metaprofiles \
   --n-clusters 6 \
-  --cluster-top-proteins 60 \
+  --cluster-top-proteins 20 \
   --metaprofile-top-proteins 10 \
   --tsne \
   -i HNRNPC-Hela-iCLIP

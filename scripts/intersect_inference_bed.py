@@ -52,6 +52,41 @@ def parse_args():
         ),
     )
     p.add_argument(
+        "--protein-select",
+        choices=["total", "centrality"],
+        default="total",
+        help=(
+            "How the top-K panel columns are chosen for the heatmap, clustering, tSNE and "
+            "the proteins x nt heatmap. 'total' (default) ranks by summed total_overlaps, "
+            "which tracks sequencing depth and genome-wide peak count as much as any "
+            "relationship to the inference loci. 'centrality' ranks by Pearson correlation "
+            "of each protein's mean profile against a Gaussian centred on the locus, which "
+            "is scale-free, so a shallow dataset with sharply centred binding can outrank a "
+            "deep one with a flat profile."
+        ),
+    )
+    p.add_argument(
+        "--centrality-sigma",
+        type=float,
+        default=5.0,
+        help=(
+            "Width (sigma, nt) of the Gaussian template used by --protein-select centrality "
+            "(default 5). Roughly the footprint width to select for: smaller favours sharp "
+            "spikes at 0, larger favours broad central humps."
+        ),
+    )
+    p.add_argument(
+        "--centrality-min-total",
+        type=float,
+        default=100.0,
+        help=(
+            "Minimum summed total_overlaps for a protein to be eligible under "
+            "--protein-select centrality (default 100). Guards against a protein whose "
+            "profile rests on a handful of overlaps scoring a near perfect correlation from "
+            "a single spike at 0. Raise it if the selected columns look sparse."
+        ),
+    )
+    p.add_argument(
         "--heatmap-min-support",
         type=float,
         default=50.0,
@@ -469,6 +504,54 @@ def smooth_metaprofile_gaussian(meta_counts: np.ndarray, sigma: float = 2.0) -> 
     return np.convolve(meta_counts, kernel, mode="same")
 
 
+def centrality_rank(
+    protein_names: list[str],
+    meta_profiles: dict[str, np.ndarray],
+    totals_by_protein: dict[str, np.ndarray],
+    window: int,
+    sigma: float,
+    min_total: float,
+) -> tuple[list[str], dict[str, float], list[str]]:
+    """
+    Rank proteins by how well their mean support profile matches a Gaussian centred on the
+    inference locus, i.e. by how specifically concentrated their binding is at offset 0.
+
+    Ranking by summed total_overlaps instead (the default) tracks how deeply a dataset was
+    sequenced and how many peaks it has genome-wide, which is why peak-rich panels dominate
+    the top-K regardless of whether their binding has anything to do with the inference loci.
+    Pearson r against a fixed template is scale-free, so a shallow dataset with a sharp
+    central profile can outrank a deep one with a flat profile.
+
+    Proteins under min_total are excluded first. Their profiles are built from very few
+    overlaps, so a single locus contributing one spike at 0 would otherwise score a near
+    perfect correlation. Flat profiles are excluded too, since Pearson r is undefined when
+    either vector has zero variance.
+
+    Returns (ranked_names, scores, excluded_names).
+    """
+    offsets = np.arange(-window, window + 1, dtype=np.float64)
+    template = np.exp(-0.5 * (offsets / float(sigma)) ** 2)
+    template = template - template.mean()
+    template_norm = float(np.sqrt(np.sum(template**2)))
+
+    scores: dict[str, float] = {}
+    excluded: list[str] = []
+    for pn in protein_names:
+        if float(np.sum(totals_by_protein[pn])) < min_total:
+            excluded.append(pn)
+            continue
+        prof = np.asarray(meta_profiles[pn], dtype=np.float64)
+        centred = prof - prof.mean()
+        denom = float(np.sqrt(np.sum(centred**2))) * template_norm
+        if denom <= 0:
+            excluded.append(pn)
+            continue
+        scores[pn] = float(np.dot(centred, template) / denom)
+
+    ranked = sorted(scores, key=scores.get, reverse=True)
+    return ranked, scores, excluded
+
+
 def logistic_scale(matrix: np.ndarray) -> np.ndarray:
     # Logistic scaling after robust centering/scaling to compress large dynamic range.
     center = float(np.median(matrix))
@@ -734,19 +817,50 @@ def main():
         print(f"Wrote metaprofile plot to: {plot_path}")
         plt.close()
 
-        # Heatmap: rank proteins by total signal, keep top-K for clustering/tSNE.
-        protein_signal_rank = sorted(
-            protein_names,
-            key=lambda pn: float(np.sum(totals_by_protein[pn])),
-            reverse=True,
-        )
-        k_top = min(args.cluster_top_proteins, len(protein_names))
+        # Heatmap: rank proteins, keep top-K for clustering/tSNE.
+        if args.protein_select == "centrality":
+            protein_signal_rank, centrality_scores, centrality_excluded = centrality_rank(
+                protein_names=protein_names,
+                meta_profiles=meta_profiles,
+                totals_by_protein=totals_by_protein,
+                window=args.window,
+                sigma=args.centrality_sigma,
+                min_total=args.centrality_min_total,
+            )
+            if not protein_signal_rank:
+                raise ValueError(
+                    f"No protein passed --centrality-min-total {args.centrality_min_total:g}. "
+                    "Lower it, or use --protein-select total."
+                )
+            if centrality_excluded:
+                print(
+                    f"Centrality ranking: {len(centrality_excluded)} of {len(protein_names)} "
+                    f"proteins excluded (summed total_overlaps < {args.centrality_min_total:g}, "
+                    "or flat profile)"
+                )
+            rank_desc = f"Pearson r vs a sigma={args.centrality_sigma:g} Gaussian centred on the locus"
+        else:
+            protein_signal_rank = sorted(
+                protein_names,
+                key=lambda pn: float(np.sum(totals_by_protein[pn])),
+                reverse=True,
+            )
+            centrality_scores = None
+            rank_desc = "summed total_overlaps"
+
+        k_top = min(args.cluster_top_proteins, len(protein_signal_rank))
         cluster_protein_names = protein_signal_rank[:k_top]
         print(
-            f"Heatmap/clustering/tSNE use top {k_top} XL groups by summed total_overlaps "
+            f"Heatmap/clustering/tSNE use top {k_top} XL groups by {rank_desc} "
             f"(of {len(protein_names)}): {', '.join(cluster_protein_names[:5])}"
             + (" ..." if k_top > 5 else "")
         )
+        if centrality_scores is not None:
+            # Print the selected columns with both scores, so a high-r/low-signal column is
+            # obvious rather than silently shaping the heatmap.
+            print("  selected columns (centrality r, summed total_overlaps):")
+            for pn in cluster_protein_names:
+                print(f"    {pn:40} r={centrality_scores[pn]:+.3f}  total={float(np.sum(totals_by_protein[pn])):,.0f}")
 
         heatmap_matrix = np.column_stack([totals_by_protein[pn] for pn in cluster_protein_names])
         # Filter out low-support rows for stable clustering (sum across all proteins in full table).
@@ -893,7 +1007,9 @@ def main():
             # Rows are proteins, not loci, so this stays legible however many loci there
             # are. meta_profiles already holds each protein's mean support vector, so this
             # is a reshape rather than another pass over the BEDs.
-            pnt_names = sorted(meta_profile_scores, key=meta_profile_scores.get, reverse=True)[:k_top]
+            # Same columns as the heatmap/clustering, so every view agrees on which
+            # proteins are in scope and --protein-select applies here too.
+            pnt_names = list(cluster_protein_names)
             pnt_matrix = np.vstack([meta_profiles[pn] for pn in pnt_names])
             # Row-normalise to each protein's own maximum: without this the plot ranks
             # proteins by sequencing depth, when the question is the shape of the profile.
