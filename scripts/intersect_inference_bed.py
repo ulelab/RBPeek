@@ -52,6 +52,18 @@ def parse_args():
         ),
     )
     p.add_argument(
+        "--heatmap-min-support",
+        type=float,
+        default=50.0,
+        help=(
+            "Keep inference loci whose summed support across ALL xl groups is at least this "
+            "(default 50, the previously hardcoded value). This scales with the number of "
+            "panel columns, not with anything intrinsic to a locus, so a wide panel makes it "
+            "permissive: 87%% of rows passed on a 297-column run, which saturates the heatmap. "
+            "Raise it when the heatmap looks uniformly dark."
+        ),
+    )
+    p.add_argument(
         "--protein-nt-heatmap",
         action="store_true",
         help=(
@@ -740,14 +752,18 @@ def main():
         # Filter out low-support rows for stable clustering (sum across all proteins in full table).
         full_row_sums = np.column_stack([totals_by_protein[pn] for pn in protein_names]).sum(axis=1)
         heatmap_row_sums = full_row_sums
-        heatmap_keep_mask = heatmap_row_sums >= 50
+        heatmap_keep_mask = heatmap_row_sums >= args.heatmap_min_support
         heatmap_matrix_filtered = heatmap_matrix[heatmap_keep_mask, :]
+        n_kept = int(np.sum(heatmap_keep_mask))
         print(
-            f"Global heatmap row filter (sum across all proteins >= 50): "
-            f"kept {int(np.sum(heatmap_keep_mask))} / {len(heatmap_keep_mask)}"
+            f"Global heatmap row filter (sum across all proteins >= {args.heatmap_min_support:g}): "
+            f"kept {n_kept} / {len(heatmap_keep_mask)} ({100 * n_kept / len(heatmap_keep_mask):.1f}%)"
         )
         if heatmap_matrix_filtered.shape[0] == 0:
-            raise ValueError("No inference BED rows pass the global heatmap filter (sum across proteins >= 50).")
+            raise ValueError(
+                f"No inference BED rows pass the global heatmap filter "
+                f"(sum across proteins >= {args.heatmap_min_support:g}). Lower --heatmap-min-support."
+            )
 
         # Logistic-scale for heatmap display; k-means clustering uses binarized presence/absence.
         heatmap_matrix_scaled = logistic_scale(heatmap_matrix_filtered)

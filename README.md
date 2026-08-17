@@ -75,6 +75,7 @@ python3 scripts/intersect_inference_bed.py \
 - **`--gaussian-sigma`**: sigma parameter for Gaussian metaprofile smoothing (default 2.0)
 - **`--panel-anchor`**: `start` (default) or `midpoint` — which point of each `--xldir` interval carries its score. Use `midpoint` whenever the panel holds **peaks** rather than 1 nt crosslink sites; see [Panel anchor](#panel-anchor-start-vs-midpoint) below.
 - **`--protein-nt-heatmap`**: write a **proteins x nucleotide** heatmap of mean support profiles (one row per protein, not per locus)
+- **`--heatmap-min-support`**: minimum summed support across **all** xl groups for a locus to enter the heatmap/clustering (default 50, previously hardcoded). Scales with panel width, so raise it for wide panels — see the note under the clustered heatmap.
 - **`--cluster-metaprofiles`**: if set, write one metaprofile plot per heatmap cluster (`metaprofile_cluster_C*.png`)
 - **`--n-clusters`**: number of k-means clusters on the binarized heatmap row matrix (default 20; capped by number of filtered rows)
 - **`--cluster-top-proteins`**: top K XL groups used for heatmap/clustering/tSNE features (default 100)
@@ -191,7 +192,7 @@ File: `<outdir>/binf_support_heatmap.png`
 - rows: `binf` loci
 - columns: the **top K** XL groups by global total signal from `--cluster-top-proteins` (default 100), not the full protein list
 - values: per-locus total support (`total_overlaps`) transformed by logistic scaling
-- pre-filter rows: keep loci with `sum(total_overlaps across *all* XL groups) >= 50` (filter uses the full table; heatmap columns are still top-K only). Note this threshold is hardcoded and was tuned against a ~15k-row inference BED with the full panel — with many columns it is permissive (87% of rows passed on the 29k-row THRAP3 run), so the heatmap can saturate.
+- pre-filter rows: keep loci with `sum(total_overlaps across *all* XL groups) >= --heatmap-min-support` (default 50; filter uses the full table, heatmap columns are still top-K only). This threshold scales with the **number of panel columns**, not with anything intrinsic to a locus, so a wide panel makes it permissive — 87% of rows passed on the 297-column THRAP3 run, which saturates the heatmap. Raise it when the heatmap looks uniformly dark.
 - **row clustering**: build a **binary** matrix over the top-K proteins (`1` if support `> 0` at that locus/protein, else `0`), then **k-means** (`--n-clusters`, default 20) on those binary rows
 - **row order** (no row dendrogram): sort by cluster id (ascending), then by total crosslink support across all proteins (descending) within each cluster
 - **column clustering only**: cosine distance + average linkage between protein columns (computed on the scaled matrix before row reorder; row order does not change column vectors for linkage)
