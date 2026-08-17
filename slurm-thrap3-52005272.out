@@ -1,0 +1,45 @@
+/camp/home/jonesm6/home/users/jonesm6/software/miniconda3/envs/rbpeek/bin/python
+ok
+inference loci: 29018
+/camp/home/jonesm6/home/users/jonesm6/software/miniconda3/envs/rbpeek/lib/python3.12/site-packages/seaborn/matrix.py:560: UserWarning: Clustering large matrix with scipy. Installing `fastcluster` may give better performance.
+  warnings.warn(msg)
+Wrote metaprofile plot to: results/thrap3/metaprofile.png
+Centrality ranking: 4 of 297 proteins excluded (summed total_overlaps < 100, or flat profile)
+Heatmap/clustering/tSNE use top 20 XL groups by Pearson r vs a sigma=5 Gaussian centred on the locus (of 297): K562-UTP3-eCLIP, ORF1-PARCLIP, IGF2BP2-PARCLIP, L1RE1-PARCLIP, K562-DDX24-eCLIP ...
+  selected columns (centrality r, summed total_overlaps):
+    K562-UTP3-eCLIP                          r=+0.911  total=98,606
+    ORF1-PARCLIP                             r=+0.907  total=180,183
+    IGF2BP2-PARCLIP                          r=+0.905  total=43,319
+    L1RE1-PARCLIP                            r=+0.899  total=198,522
+    K562-DDX24-eCLIP                         r=+0.883  total=790,618
+    K562-YBX3-eCLIP                          r=+0.875  total=3,122,155
+    IGF2BP1-PARCLIP                          r=+0.871  total=44,649
+    LIN28B-PARCLIP                           r=+0.871  total=26,682
+    K562-SND1-eCLIP                          r=+0.871  total=1,053,237
+    ZC3H7B-PARCLIP                           r=+0.870  total=83,541
+    TIA1-Hela-iCLIP                          r=+0.869  total=34,005
+    DND1-PARCLIP                             r=+0.864  total=69,726
+    FXR2-PARCLIP                             r=+0.864  total=12,964
+    K562-RPS3-eCLIP                          r=+0.864  total=589,173
+    EWSR1-PARCLIP                            r=+0.861  total=11,169
+    K562-RPS11-eCLIP                         r=+0.857  total=389,664
+    K562-ZNF622-eCLIP                        r=+0.856  total=3,400,319
+    K562-GTF2F1-eCLIP                        r=+0.854  total=474,238
+    K562-GRWD1-eCLIP                         r=+0.853  total=3,319,025
+    IGF2BP3-PARCLIP                          r=+0.848  total=50,645
+Global heatmap row filter (sum across all proteins >= 200): kept 22710 / 29018 (78.3%)
+Heatmap colour scale: percentile (clip at 99th of non-zero), 72.5% of cells empty, 0.27% saturated at 1.0
+Wrote clustered heatmap to: results/thrap3/binf_support_heatmap.png
+Row cluster sizes (binary k-means, k=6): {1: 3276, 2: 8776, 3: 1801, 4: 3441, 5: 4032, 6: 1384}
+Wrote heatmap cluster assignments to: results/thrap3/binf_heatmap_clusters.tsv
+Wrote cluster metaprofile plot to: results/thrap3/metaprofile_cluster_C1.png
+Wrote cluster metaprofile plot to: results/thrap3/metaprofile_cluster_C2.png
+Wrote cluster metaprofile plot to: results/thrap3/metaprofile_cluster_C3.png
+Wrote cluster metaprofile plot to: results/thrap3/metaprofile_cluster_C4.png
+Wrote cluster metaprofile plot to: results/thrap3/metaprofile_cluster_C5.png
+Wrote cluster metaprofile plot to: results/thrap3/metaprofile_cluster_C6.png
+Wrote protein x nucleotide heatmap to: results/thrap3/protein_nt_metaprofile_heatmap.png (20 proteins)
+HNRNPC-Hela-iCLIP inspect heatmap row filter (sum across nt >= 10): kept 3552 / 29018
+Wrote protein nucleotide heatmap to: results/thrap3/binf_HNRNPC-Hela-iCLIP_nt_support_heatmap.png
+Wrote binf summary table to: results/thrap3/binf_summary.tsv
+Wrote tSNE plot to: results/thrap3/binf_summary_tsne.png (perplexity=30.0)
