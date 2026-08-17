@@ -60,9 +60,23 @@ mkdir -p "$OUT"
 # outranked both decoys, including one at a quarter of their depth, and the 40 nt decoy
 # scored r=-0.003.
 #
-# --heatmap-min-support 2000 against the default 50. Row support sums over all 297 columns,
-# so the default sat ~20x below this run's median row sum of 1,053 and kept 87% of loci,
-# saturating the heatmap. 2000 keeps 10,220 of 29,018 (35%). Tune from the run log.
+# --heatmap-min-support 200, deliberately low. This filter is NOT a peak count: row support
+# is the summed SCORE column of every overlapping panel interval across all 297 columns and
+# the whole +/-100nt window, so its scale is arbitrary (median 1,053 on the last run).
+#
+# It also correlates with THRAP3 reproducibility - median row support is 821 at 2/4 reps and
+# 2,324 at 4/4 - so a high threshold silently culls the least reproducible loci. Retention
+# of 2/4-rep vs 4/4-rep loci: 87%/87% at 50, 76%/82% at 200, 61%/74% at 500, 29%/53% at
+# 2000. 200 keeps the bias mild while still dropping near-empty rows from the k-means.
+#
+# Raising it does NOT fix the dark heatmap. That comes from logistic_scale() centring on the
+# matrix median, which is ~0 for a sparse matrix, so every empty cell renders at exactly 0.5
+# and the whole palette below 0.5 goes unused - which is why the last run's colourbar
+# started at 0.5. That needs a scaling change, not a row cull.
+#
+# Nothing is lost either way: binf_summary.tsv and binf_heatmap_clusters.tsv keep all 29,018
+# loci with a passes_heatmap_filter flag, and the metaprofile, the proteins x nt heatmap and
+# the centrality ranking are all computed over every locus, unfiltered.
 python3 scripts/intersect_inference_bed.py \
   -x ../CLIP \
   -b "$BINF" \
@@ -76,7 +90,7 @@ python3 scripts/intersect_inference_bed.py \
   --protein-select centrality \
   --centrality-sigma 5 \
   --centrality-min-total 100 \
-  --heatmap-min-support 2000 \
+  --heatmap-min-support 200 \
   --cluster-metaprofiles \
   --n-clusters 6 \
   --cluster-top-proteins 20 \
