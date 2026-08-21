@@ -53,7 +53,9 @@ def parse_args():
 
 
 def run(cmd, stdout=None):
-    r = subprocess.run(cmd, stdout=stdout, stderr=subprocess.PIPE, text=True)
+    # universal_newlines rather than text=: text= is Python 3.7+, and this script is
+    # routinely run with the login node's system python, which is 3.6.
+    r = subprocess.run(cmd, stdout=stdout, stderr=subprocess.PIPE, universal_newlines=True)
     if r.returncode != 0:
         sys.exit(f"command failed: {' '.join(str(c) for c in cmd)}\n{r.stderr[:600]}")
     return r
@@ -84,8 +86,10 @@ def gtf_to_bed(gtf: Path, feature: str, out: Path, chr_prefix: bool) -> int:
             c = line.rstrip("\n").split("\t")
             fout.write("\t".join([c[0], c[1], c[2], ".", ".", c[3]]) + "\n")
     padded.replace(out)
-    raw.unlink(missing_ok=True)
-    srt.unlink(missing_ok=True)
+    # Path.unlink(missing_ok=) is Python 3.8+; guard instead.
+    for tmp in (raw, srt):
+        if tmp.exists():
+            tmp.unlink()
     return n
 
 
@@ -96,8 +100,20 @@ def subset(anchors: Path, regions: Path, out: Path, invert: bool = False) -> int
     return sum(1 for _ in open(out))
 
 
+def require(tool):
+    """Fail with a usable message rather than a bare FileNotFoundError from subprocess."""
+    from shutil import which
+    if which(tool) is None:
+        sys.exit(
+            f"{tool} not found on PATH. Activate the environment that provides it, e.g.:\n"
+            "  conda activate rbpeek"
+        )
+
+
 def main():
     args = parse_args()
+    require("bedtools")
+    require("sort")
     outdir = args.outdir
     work = outdir / "region_work"
     work.mkdir(parents=True, exist_ok=True)

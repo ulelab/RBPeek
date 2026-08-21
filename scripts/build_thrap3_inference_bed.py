@@ -63,7 +63,7 @@ def parse_args():
 PRIMARY = {f"chr{c}" for c in list(range(1, 23)) + ["X", "Y", "M", "MT"]}
 
 
-def normalise(raw_dir: Path, workdir: Path, keep_scaffolds: bool) -> list[Path]:
+def normalise(raw_dir, workdir, keep_scaffolds):  # unannotated: list[Path] needs Python 3.9+
     """Rewrite each replicate's peaks as sorted, chr-prefixed BED6 tagged with its replicate."""
     out = []
     for sample, rep in sorted(SAMPLE_TO_REP.items(), key=lambda kv: kv[1]):
