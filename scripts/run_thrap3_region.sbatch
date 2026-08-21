@@ -17,9 +17,13 @@
 # between the two jobs is which subset of the THRAP3 anchors is used. That is what makes
 # the two enrichment rankings comparable: any divergence is region, not parameters.
 #
-# Build the subsets once before submitting either job:
+# Build the subsets once before submitting either job (the GTF path is now the default,
+# so -g is only needed to override it):
 #   python3 scripts/split_inference_bed_by_region.py \
-#     -b THRAP3/THRAP3_merged_min2rep_anchors.bed -g "$GTF" -o THRAP3
+#     -b THRAP3/THRAP3_merged_min2rep_anchors.bed -o THRAP3
+#
+# Default annotation: gencodev39_annotation/filtered.gencode.v39.main.annotation.gtf, the
+# same flavour Clippy was run against, and chr-prefixed like the inference BED.
 #
 # Memory is raised to 90GB: the panel now includes four crosslink-level BEDs, one of which
 # is ~550MB, far denser than the Clippy peak files the 60GB runs used.

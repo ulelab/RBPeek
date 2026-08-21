@@ -25,11 +25,22 @@ import subprocess
 import sys
 from pathlib import Path
 
+# GENCODE v39, hg38. This is the "filtered main" annotation, i.e. the same flavour Clippy
+# was run against, so exon/intron calls here line up with how the peaks were defined.
+# GENCODE is chr-prefixed like the inference BED, so no chromosome renaming is needed.
+DEFAULT_GTF = "/camp/lab/ulej/home/shared/genomes/hg38/gencodev39_annotation/filtered.gencode.v39.main.annotation.gtf"
+
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("-b", "--bed", required=True, type=Path, help="Inference BED (BED6, 1 nt anchors)")
-    p.add_argument("-g", "--gtf", required=True, type=Path, help="Gene annotation GTF (must match the BED's assembly)")
+    p.add_argument(
+        "-g",
+        "--gtf",
+        type=Path,
+        default=Path(DEFAULT_GTF),
+        help=f"Gene annotation GTF, must match the BED's assembly (default: {DEFAULT_GTF})",
+    )
     p.add_argument("-o", "--outdir", type=Path, default=Path("THRAP3"), help="Output directory")
     p.add_argument("--prefix", default=None, help="Output basename (default: the input BED's stem)")
     p.add_argument("--keep-intergenic", action="store_true", help="Also write the intergenic subset")
