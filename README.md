@@ -75,6 +75,7 @@ python3 scripts/intersect_inference_bed.py \
 - **`--gaussian-sigma`**: sigma parameter for Gaussian metaprofile smoothing (default 2.0)
 - **`--panel-anchor`**: `start` (default) or `midpoint` — which point of each `--xldir` interval carries its score. Use `midpoint` whenever the panel holds **peaks** rather than 1 nt crosslink sites; see [Panel anchor](#panel-anchor-start-vs-midpoint) below.
 - **`--protein-nt-heatmap`**: write a **proteins x nucleotide** heatmap of mean support profiles (one row per protein, not per locus)
+- **`--nt-heatmap-window`**: crop both nucleotide heatmaps to +/- this many nt for **display only** (default: full `--window`). `--window` still governs what is counted, so all statistics, the metaprofile, the enrichment ranking and the summary table are unchanged.
 - **`--heatmap-min-support`**: minimum summed support across **all** xl groups for a locus to enter the heatmap/clustering (default 50, previously hardcoded). Scales with panel width, so raise it for wide panels — see the note under the clustered heatmap.
 - **`--heatmap-scale`**: `logistic` (default) or `percentile` — colour scaling for the clustered heatmap; see [Heatmap colour scaling](#heatmap-colour-scaling) below.
 - **`--heatmap-scale-percentile`**: percentile of non-zero values mapped to the top of the colour range under `--heatmap-scale percentile` (default 99.0)

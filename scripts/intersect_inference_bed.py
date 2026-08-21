@@ -155,6 +155,18 @@ def parse_args():
         ),
     )
     p.add_argument(
+        "--nt-heatmap-window",
+        type=int,
+        default=None,
+        help=(
+            "Crop both nucleotide heatmaps to +/- this many nt for DISPLAY only (default: "
+            "show the full --window). Purely a plotting crop: --window still governs what is "
+            "counted, so every statistic, the metaprofile, the enrichment ranking and the "
+            "summary table are unchanged. Use it to zoom in on the centre without narrowing "
+            "the analysis, e.g. --window 100 --nt-heatmap-window 50."
+        ),
+    )
+    p.add_argument(
         "--protein-nt-heatmap",
         action="store_true",
         help=(
@@ -854,6 +866,14 @@ def main():
     binf_path = Path(args.bed)
     if not binf_path.exists():
         raise FileNotFoundError(f"Inference BED not found: {binf_path}")
+    if args.nt_heatmap_window is not None:
+        if args.nt_heatmap_window < 1:
+            raise ValueError("--nt-heatmap-window must be >= 1")
+        if args.nt_heatmap_window > args.window:
+            raise ValueError(
+                f"--nt-heatmap-window {args.nt_heatmap_window} exceeds --window {args.window}; "
+                "it is a display crop, so it cannot show more than was counted."
+            )
     if not Path(args.genome).exists():
         raise FileNotFoundError(f"Genome sizes file not found: {args.genome}")
 
@@ -1203,6 +1223,15 @@ def main():
             # proteins are in scope and --protein-select applies here too.
             pnt_names = list(cluster_protein_names)
             pnt_matrix = np.vstack([meta_profiles[pn] for pn in pnt_names])
+            # Display crop only; meta_profiles itself (and everything derived from it) keeps
+            # the full --window.
+            pnt_lo, pnt_hi = 0, pnt_matrix.shape[1]
+            pnt_axis_window = args.window
+            if args.nt_heatmap_window is not None:
+                pnt_axis_window = args.nt_heatmap_window
+                pnt_lo = args.window - args.nt_heatmap_window
+                pnt_hi = args.window + args.nt_heatmap_window + 1
+                pnt_matrix = pnt_matrix[:, pnt_lo:pnt_hi]
             # Row-normalise to each protein's own maximum: without this the plot ranks
             # proteins by sequencing depth, when the question is the shape of the profile.
             row_max = pnt_matrix.max(axis=1, keepdims=True)
@@ -1226,7 +1255,7 @@ def main():
                 row_cluster=pnt_linkage is not None,
                 col_cluster=False,
                 cmap="magma",
-                xticklabels=max(1, (2 * args.window + 1) // 20),
+                xticklabels=max(1, (2 * pnt_axis_window + 1) // 20),
                 yticklabels=pnt_names,
                 figsize=(12, max(6, 0.18 * len(pnt_names))),
                 cbar_kws={"label": "mean support\n(row-normalised)"},
@@ -1236,7 +1265,7 @@ def main():
             )
             # x tick positions are matrix columns; relabel them as offsets.
             xt = pnt_fig.ax_heatmap.get_xticks()
-            pnt_fig.ax_heatmap.set_xticklabels([f"{int(x) - args.window}" for x in xt], rotation=90, fontsize=7)
+            pnt_fig.ax_heatmap.set_xticklabels([f"{int(x) - pnt_axis_window}" for x in xt], rotation=90, fontsize=7)
             pnt_fig.ax_heatmap.set_xlabel("Nucleotide position relative to inference locus")
             pnt_fig.ax_heatmap.set_ylabel("Protein")
             pnt_fig.ax_heatmap.tick_params(axis="y", labelsize=6)
@@ -1250,10 +1279,16 @@ def main():
                 available = ", ".join(protein_names)
                 raise ValueError(f"Protein '{args.inspect_protein}' not found. Available proteins: {available}")
             nt_offsets = np.arange(-args.window, args.window + 1, dtype=np.int64)
+            insp_lo, insp_hi = 0, len(nt_offsets)
+            if args.nt_heatmap_window is not None:
+                insp_lo = args.window - args.nt_heatmap_window
+                insp_hi = args.window + args.nt_heatmap_window + 1
+                nt_offsets = nt_offsets[insp_lo:insp_hi]
             inspect_totals = inspect_counts_matrix.sum(axis=1)
             inspect_keep_mask = inspect_totals >= 10
             inspect_counts_filtered = inspect_counts_matrix[inspect_keep_mask, :]
-            inspect_counts_log = np.log1p(inspect_counts_filtered)
+            # Row filter above used the full window on purpose; crop only what is drawn.
+            inspect_counts_log = np.log1p(inspect_counts_filtered[:, insp_lo:insp_hi])
             print(
                 f"{args.inspect_protein} inspect heatmap row filter (sum across nt >= 10): "
                 f"kept {int(np.sum(inspect_keep_mask))} / {len(inspect_keep_mask)}"
