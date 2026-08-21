@@ -13,6 +13,12 @@ Two categories are skipped by default, both for reasons that already cost us a r
          correlates by construction and reads as a reproducible partnership.
   _Mm    mouse. The inference BED is hg38, and mouse shares chromosome NAMES with human but
          not coordinates, so bedtools would report coincidental overlaps as real signal.
+  B_cells / Bcells
+         the same mouse samples. Their crosslink files were named ELAVL1_Bcells_*_iCLIP_Mm,
+         but the Clippy peak calls came back as HuR_iCLIP_B_cells_LPS/antiIgM_*, i.e. the
+         _Mm marker is GONE and HuR is an alias for ELAVL1. Matching on the species suffix
+         alone would let them through, so the B-cell tissue term is skipped too. Remove this
+         pattern only if human B-cell data is ever added.
 
 Paths are written relative to --xldir, since that is how intersect_inference_bed.py resolves
 the `file` column. The script is idempotent: rows already present are reported and skipped,
@@ -26,7 +32,7 @@ import re
 import sys
 from pathlib import Path
 
-DEFAULT_SKIP = "TRA2A,_Mm"
+DEFAULT_SKIP = "TRA2A,_Mm,B_cells,Bcells"
 
 
 def parse_args():
@@ -50,8 +56,12 @@ def group_from_filename(name: str) -> str:
     for marker in ("_rollmean", "_roll", "_Summits", "_Peaks"):
         i = stem.find(marker)
         if i > 0:
-            return stem[:i]
-    return stem
+            stem = stem[:i]
+            break
+    # Trim the pipeline-stage tails Clippy leaves behind, e.g. "X.genome.peaks" or
+    # "X_genome.clippy." -> "X". Cosmetic, but the group name is what labels every plot axis.
+    stem = re.sub(r"[._](genome\.clippy|genome\.peaks|genome)\.?$", "", stem)
+    return stem.strip("._")
 
 
 def main():
@@ -105,6 +115,9 @@ def main():
         return
 
     print(f"\nto add ({len(to_add)}):")
+    print("  NOTE group names are derived from filenames and will not match the panel's")
+    print("  CellLine-PROTEIN-assay convention. Check them, and prefer hand-written rows")
+    print("  when the derived name would be unclear on a plot axis.")
     for rel, group in to_add:
         print(f"  {group:28} <- {rel}")
 
