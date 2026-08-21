@@ -1,0 +1,46 @@
+/camp/home/jonesm6/home/users/jonesm6/software/miniconda3/envs/rbpeek/bin/python
+ok
+region: intronic
+inference loci: 8666
+/camp/home/jonesm6/home/users/jonesm6/software/miniconda3/envs/rbpeek/lib/python3.12/site-packages/seaborn/matrix.py:560: UserWarning: Clustering large matrix with scipy. Installing `fastcluster` may give better performance.
+  warnings.warn(msg)
+Wrote metaprofile plot to: results/thrap3_intronic/metaprofile.png
+Enrichment ranking: 90 of 302 proteins excluded (summed total_overlaps < 100 or fewer than 500 loci with signal)
+Heatmap/clustering/tSNE use top 20 XL groups by fraction of loci peaking within +/-5nt (of 302): HepG2-STAU2-eCLIP, HepG2-HNRNPC-eCLIP, HepG2-POLR2G-eCLIP, K562-HNRNPC-eCLIP, HNRNPC-Hela-iCLIP ...
+  selected columns (frac centred, loci with signal, summed total_overlaps):
+    HepG2-STAU2-eCLIP                        frac centred=+0.490  loci=  1288  total=112,264
+    HepG2-HNRNPC-eCLIP                       frac centred=+0.474  loci=  3561  total=340,146
+    HepG2-POLR2G-eCLIP                       frac centred=+0.434  loci=  1270  total=59,629
+    K562-HNRNPC-eCLIP                        frac centred=+0.433  loci=  4779  total=1,020,542
+    HNRNPC-Hela-iCLIP                        frac centred=+0.432  loci=  2483  total=214,166
+    K562-DROSHA-eCLIP                        frac centred=+0.424  loci=  2243  total=352,408
+    K562-WRN-eCLIP                           frac centred=+0.409  loci=   738  total=78,547
+    K562-TROVE2-eCLIP                        frac centred=+0.409  loci=  2012  total=264,358
+    K562-SAFB-eCLIP                          frac centred=+0.405  loci=  4168  total=1,713,606
+    K562-DDX52-eCLIP                         frac centred=+0.402  loci=  1183  total=149,834
+    K562-NSUN2-eCLIP                         frac centred=+0.396  loci=   657  total=325,050
+    HepG2-ILF3-eCLIP                         frac centred=+0.394  loci=   950  total=44,594
+    HepG2-TROVE2-eCLIP                       frac centred=+0.393  loci=  1784  total=175,110
+    HepG2-NKRF-eCLIP                         frac centred=+0.393  loci=  1844  total=137,897
+    HepG2-SAFB-eCLIP                         frac centred=+0.392  loci=  3057  total=434,201
+    HepG2-SUGP2-eCLIP                        frac centred=+0.391  loci=  1406  total=116,432
+    HepG2-DDX52-eCLIP                        frac centred=+0.379  loci=  1502  total=109,946
+    K562-XRCC6-eCLIP                         frac centred=+0.379  loci=  2683  total=599,742
+    K562-ILF3-eCLIP                          frac centred=+0.376  loci=  1509  total=117,372
+    K562-SND1-eCLIP                          frac centred=+0.375  loci=  2296  total=194,550
+Global heatmap row filter (sum across all proteins >= 200): kept 4834 / 8666 (55.8%)
+Heatmap colour scale: percentile (clip at 99th of non-zero), 60.0% of cells empty, 0.40% saturated at 1.0
+Wrote clustered heatmap to: results/thrap3_intronic/binf_support_heatmap.png
+Row cluster sizes (binary k-means, k=6): {1: 722, 2: 1469, 3: 552, 4: 887, 5: 883, 6: 321}
+Wrote heatmap cluster assignments to: results/thrap3_intronic/binf_heatmap_clusters.tsv
+Wrote cluster metaprofile plot to: results/thrap3_intronic/metaprofile_cluster_C1.png
+Wrote cluster metaprofile plot to: results/thrap3_intronic/metaprofile_cluster_C2.png
+Wrote cluster metaprofile plot to: results/thrap3_intronic/metaprofile_cluster_C3.png
+Wrote cluster metaprofile plot to: results/thrap3_intronic/metaprofile_cluster_C4.png
+Wrote cluster metaprofile plot to: results/thrap3_intronic/metaprofile_cluster_C5.png
+Wrote cluster metaprofile plot to: results/thrap3_intronic/metaprofile_cluster_C6.png
+Wrote protein x nucleotide heatmap to: results/thrap3_intronic/protein_nt_metaprofile_heatmap.png (20 proteins)
+HNRNPC-Hela-iCLIP inspect heatmap row filter (sum across nt >= 10): kept 1671 / 8666
+Wrote protein nucleotide heatmap to: results/thrap3_intronic/binf_HNRNPC-Hela-iCLIP_nt_support_heatmap.png
+Wrote binf summary table to: results/thrap3_intronic/binf_summary.tsv
+Wrote tSNE plot to: results/thrap3_intronic/binf_summary_tsne.png (perplexity=30.0)
