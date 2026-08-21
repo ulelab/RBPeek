@@ -296,7 +296,3 @@ PARCLIP-Clippy/USP10_mergedTC_rollmean10_minHeightAdjust1.0_minPromAdjust1.0_min
 PARCLIP-Clippy/WDR33_SRR1566437_genomeTC_rollmean10_minHeightAdjust1.0_minPromAdjust1.0_minGeneCount5_Peaks.bed	WDR33-PARCLIP
 PARCLIP-Clippy/ZC3H7B_mergedTC_rollmean10_minHeightAdjust1.0_minPromAdjust1.0_minGeneCount5_Peaks.bed	ZC3H7B-PARCLIP
 PARCLIP-Clippy/ZFP36_SRR1046759_genomeTC_rollmean10_minHeightAdjust1.0_minPromAdjust1.0_minGeneCount5_Peaks.bed	ZFP36-PARCLIP
-../RBPeek/ELAVL1_K562_eCLIP_Hs.genome.xl.merged.bed	K562-ELAVL1-XL-eCLIP
-../RBPeek/TRA2A_HepG2_eCLIP_Hs.genome.xl.merged.bed	HepG2-TRA2A-XL-eCLIP
-../RBPeek/TRA2A_K562_eCLIP_Hs.genome.xl.merged.bed	K562-TRA2A-XL-eCLIP
-../RBPeek/TRA2B_MDA231_iCLIP_Hs.genome.xl.merged.bed	TRA2B-MDA231-XL-iCLIP
