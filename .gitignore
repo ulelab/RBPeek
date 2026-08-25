@@ -5,3 +5,4 @@ __pycache__/
 # GitHub's 50MB warning and near its 100MB hard limit. Keep it on the HPC.
 binf_summary.tsv
 *:Zone.Identifier
+Centrosome/work/
