@@ -2,6 +2,7 @@ import argparse
 import csv
 import gzip
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -392,6 +393,75 @@ def merge_protein_crosslinks(protein_dir: Path, merged_dir: Path) -> Path:
     )
     subprocess.run(merge_cmd, cwd=str(protein_dir), shell=True, check=True)
     return out_path
+
+
+def _first_chrom(path: Path):
+    """First data chromosome in a BED/BED.GZ, or None if the file has no usable rows."""
+    with _open_text_auto(path) as fh:
+        for line in fh:
+            if not line.strip() or line.startswith(("#", "track", "browser")):
+                continue
+            return line.split("\t")[0]
+    return None
+
+
+def harmonise_panel_chroms(protein_sources, binf_path: Path, tmpdir: Path):
+    """
+    Rewrite any panel file whose chromosome naming disagrees with the inference BED.
+
+    This exists because the failure it prevents is SILENT. bedtools finds no overlap between
+    "1" and "chr1", so a mismatched panel column yields all zeros, the run completes happily,
+    and the column simply looks like an RBP that binds nothing. Five columns were lost that
+    way before this check existed.
+
+    Only mismatched files are rewritten, into tmpdir, so a correctly-named panel costs one
+    line read per file and nothing else.
+    """
+    binf_chrom = _first_chrom(binf_path)
+    if binf_chrom is None:
+        return protein_sources
+    binf_chr = binf_chrom.startswith("chr")
+
+    fixed = []
+    renamed = []
+    empty = []
+    for name, path in protein_sources:
+        first = _first_chrom(path)
+        if first is None:
+            empty.append(name)
+            fixed.append((name, path))
+            continue
+        if first.startswith("chr") == binf_chr:
+            fixed.append((name, path))
+            continue
+        out = tmpdir / ("panel_chrfix_%s.bed" % re.sub(r"[^A-Za-z0-9_.-]", "_", name))
+        with _open_text_auto(path) as fin, open(str(out), "w", encoding="utf-8") as fout:
+            for line in fin:
+                if not line.strip() or line.startswith(("#", "track", "browser")):
+                    continue
+                cols = line.rstrip("\n").split("\t")
+                c = cols[0]
+                if binf_chr:
+                    c = c if c.startswith("chr") else "chr" + c
+                    if c == "chrMT":
+                        c = "chrM"
+                else:
+                    c = c[3:] if c.startswith("chr") else c
+                cols[0] = c
+                fout.write("\t".join(cols) + "\n")
+        renamed.append(name)
+        fixed.append((name, out))
+
+    if renamed:
+        print(
+            "Chromosome naming: rewrote %d panel column(s) to match the inference BED "
+            "(%s style): %s%s"
+            % (len(renamed), "chr-prefixed" if binf_chr else "Ensembl",
+               ", ".join(renamed[:5]), " ..." if len(renamed) > 5 else "")
+        )
+    if empty:
+        print("WARNING: %d panel column(s) have no data rows: %s" % (len(empty), ", ".join(empty[:5])))
+    return fixed
 
 
 def load_binf_and_prepare_windows(binf_path: Path, window: int, genome: str, tmpdir: Path):
@@ -920,6 +990,9 @@ def main():
             genome=args.genome,
             tmpdir=tmpdir,
         )
+
+        protein_sources = harmonise_panel_chroms(protein_sources, binf_path, tmpdir)
+        protein_names = [name for name, _ in protein_sources]
 
         n_binf = len(binf_keys)
         L = 2 * args.window + 1
