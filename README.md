@@ -4,10 +4,16 @@ Summarize CLIP/iCLIP/eCLIP-style **crosslink (xl) support** around loci from an 
 
 - a **metaprofile plot** (primary output): Gaussian-smoothed **mean** XL file-support signal from \(-window:+window\) (top 10 proteins by default)
 - an **optional per-locus summary table** (TSV): per-locus signal shape metrics for each protein
-- **per-protein merged XL BEDs** written under `<xldir>/merged/`
-- a **clustered heatmap** across all proteins (`binf` rows x proteins columns; values = per-locus total support after logistic scaling)
+- **per-protein merged XL BEDs** written under `<xldir>/merged/` (merge mode only; not under `--skip-merge`)
+- a **clustered heatmap** across the top-K proteins (`binf` rows x proteins columns; values = per-locus total support, scaled per `--heatmap-scale`)
 - a **heatmap cluster assignment table** for downstream cluster-specific metaprofiles
 - an optional **single-protein nucleotide heatmap** (`binf` rows x nt columns) via `-i/--inspect-protein`
+- an optional **proteins x nucleotide heatmap** via `--protein-nt-heatmap` — one row per *protein*, which stays legible at any locus count and is the plot to use for positional questions
+
+This repo also carries the analysis wrappers built around the tool. See
+[Repository layout](#repository-layout) for what each script does, and
+[`THRAP3/README.md`](THRAP3/README.md) and [`Centrosome/README.md`](Centrosome/README.md)
+for the two analyses and their findings.
 
 ## Inputs
 
@@ -79,7 +85,7 @@ python3 scripts/intersect_inference_bed.py \
 - **`--heatmap-min-support`**: minimum summed support across **all** xl groups for a locus to enter the heatmap/clustering (default 50, previously hardcoded). Scales with panel width, so raise it for wide panels — see the note under the clustered heatmap.
 - **`--heatmap-scale`**: `logistic` (default) or `percentile` — colour scaling for the clustered heatmap; see [Heatmap colour scaling](#heatmap-colour-scaling) below.
 - **`--heatmap-scale-percentile`**: percentile of non-zero values mapped to the top of the colour range under `--heatmap-scale percentile` (default 99.0)
-- **`--protein-select`**: `total` (default), `enrichment` (recommended) or `centrality` — how the top-K columns are chosen; see [Protein selection](#protein-selection-total-vs-centrality) below.
+- **`--protein-select`**: `total` (default), `enrichment` (recommended) or `centrality` — how the top-K columns are chosen; see [Protein selection](#protein-selection-total-enrichment-centrality) below.
 - **`--enrichment-window`**: half-width (nt) counted as "on the locus" by `enrichment` ranking (default 5)
 - **`--protein-min-loci`**: minimum loci with signal for a protein to be eligible under `enrichment`/`centrality` (default 500)
 - **`--centrality-sigma`**: width (nt) of the Gaussian template for centrality ranking (default 5.0)
@@ -87,8 +93,8 @@ python3 scripts/intersect_inference_bed.py \
 - **`--exclude-groups`**: comma-separated substrings; panel columns whose group name contains one are dropped before anything is computed (e.g. `--exclude-groups PARCLIP`)
 - **`--cluster-metaprofiles`**: if set, write one metaprofile plot per heatmap cluster (`metaprofile_cluster_C*.png`)
 - **`--n-clusters`**: number of k-means clusters on the binarized heatmap row matrix (default 20; capped by number of filtered rows)
-- **`--cluster-top-proteins`**: top K XL groups used for heatmap/clustering/tSNE features (default 100)
-- **`--metaprofile-top-proteins`**: top K proteins plotted in global/per-cluster metaprofiles (default 15)
+- **`--cluster-top-proteins`**: top K XL groups used for heatmap/clustering/tSNE features (default 60)
+- **`--metaprofile-top-proteins`**: top K proteins plotted in global/per-cluster metaprofiles (default 10)
 - **`-i/--inspect-protein`**: optional protein name for an extra per-nucleotide heatmap for that protein
 - **`--skip-merge`**: skip per-protein merge and use direct BED/BED.GZ inputs from `--xldir`
 - **`-s/--samplesheet`**: optional TSV (`file`, `group`) used with `--skip-merge`; `file` is resolved relative to `--xldir`
@@ -124,6 +130,23 @@ When `--skip-merge` is used, the script does not merge protein subdirectories.
   - `file` paths are relative to `--xldir`
   - `group` becomes the protein label in plots/tables
 - without `--samplesheet`: uses all BED/BED.GZ files directly in `--xldir`
+
+### 1c) Chromosome naming is harmonised automatically
+
+Merge mode normalises panel chromosome names to `chr*`; `--skip-merge` does not, so a panel
+file named Ensembl-style (`1`) against a `chr1` inference BED used to produce **zero**
+overlaps. That failure is silent — the run completes and the column simply reads as an RBP
+that binds nothing. Five columns were lost that way before this was fixed.
+
+The script now compares each panel file's first data chromosome against the inference BED's
+convention and rewrites only the mismatched ones into its temp directory, logging:
+
+```text
+Chromosome naming: rewrote 5 panel column(s) to match the inference BED (chr-prefixed style): ...
+```
+
+A correctly-named panel costs one line read per file and is otherwise untouched. Panel files
+with no data rows are warned about, since they look identical in the output.
 
 ### 2) Build per-locus signal vectors
 
@@ -197,7 +220,7 @@ Raising `--heatmap-min-support` is *not* an alternative fix. It culls rows rathe
 rescaling colour, and because row support correlates with inference-BED reproducibility it
 biases which loci survive.
 
-### Protein selection: `total` vs `centrality`
+### Protein selection: `total`, `enrichment`, `centrality`
 
 `--cluster-top-proteins K` picks which panel columns reach the heatmap, clustering, tSNE
 and the proteins x nt heatmap. `--protein-select` decides *how* they are picked.
@@ -256,6 +279,36 @@ from a handful of overlaps can score a near perfect correlation off a single spi
 Flat profiles are excluded too, Pearson r being undefined at zero variance. Selected
 columns are logged with both their r and their total, so a high-r/low-signal column is
 visible rather than silently shaping the heatmap.
+
+#### The eligibility gate
+
+`enrichment` scores a **fraction with a variable denominator** — of the loci where a protein
+has any signal, how many peak within `--enrichment-window`. A protein with signal at one
+locus that happens to peak on target scores a perfect **1.000**, beating a protein at 0.380
+built on 7,968 loci. Ungated, the top of one real ranking was a PAR-CLIP column with **one**
+locus and a summed score of 5.
+
+Two gates apply, and a protein must clear both or it is dropped from the ranking entirely:
+
+- `--centrality-min-total` (default 100) — enough total signal
+- `--protein-min-loci` (default 500) — enough loci for the fraction to mean anything
+
+Precision of the fraction, near 0.30:
+
+| loci | standard error |
+|---:|---|
+| 100 | ±0.046 |
+| 300 | ±0.026 |
+| 500 | ±0.021 |
+| 5,000 | ±0.006 |
+
+**`--protein-min-loci` is an absolute count, so it does not scale with the inference set.**
+Comparing two runs of different size therefore gates them unequally: 500 demanded signal at
+1.7% of loci on a 29,018-locus set but 5.8% on an 8,666-locus one, excluding 38 versus 90 of
+302 proteins. A protein can then be ranked in one run and invisible in the other purely from
+set size — and **exclusion is indistinguishable from absence** in the output. When comparing
+runs, size-match the gate (`500 x n_small/n_large`) and check the `N of M proteins excluded`
+line in both logs.
 
 ## Outputs
 
@@ -382,9 +435,56 @@ These metrics are computed from the per-locus vector across \(-window..+window\)
   - take the window with the maximum sum
   - report the **center** position of that window as an offset
 
+## Repository layout
+
+`intersect_inference_bed.py` is the analysis engine. Everything else prepares its inputs or
+interprets its outputs.
+
+### Building an inference BED
+
+| script | purpose |
+|---|---|
+| `build_inference_bed_from_peaks.py` | **General.** Replicate Clippy peak calls -> inference BED. Normalises chromosome names, merges strand-aware, keeps regions supported by `--min-reps` replicates, collapses each to a 1 nt midpoint anchor. `--subtract` drops regions overlapping control peaks, for proximity-labelling baits. |
+| `build_thrap3_inference_bed.py` | The THRAP3-specific original, kept for reproducibility of that analysis. Superseded by the general script above. |
+| `split_inference_bed_by_region.py` | Splits an inference BED into **exonic** and **intronic** subsets from a GTF. Strand-aware, exon-priority (all transcripts' exons merged first), so the two sets are disjoint by construction. Defaults to GENCODE v39. |
+
+Why each transformation is needed is documented in the scripts themselves; the short version
+is that all three failures they prevent are **silent** — an unnormalised BED intersects
+nothing, an unfiltered union follows sequencing depth, and a locus wider than 1 nt smears the
+metaprofile by its own width.
+
+### Panel management
+
+| script | purpose |
+|---|---|
+| `add_new_peaks_to_samplesheet.py` | Discovers `*_Peaks.bed` and appends rows to `RBPeekSamplesheet.tsv`, with paths relative to `--xldir`. Idempotent, supports `--dry-run`. Skips patterns in `--skip` (default `TRA2A,_Mm,B_cells,Bcells`) — see the script for why each is there. |
+| `run_clippy_new_samples.sbatch` | Calls Clippy peaks for samples that only exist as crosslink BEDs, with the parameters the panel was built with. |
+
+### Interpreting results
+
+| script | purpose |
+|---|---|
+| `compare_binding_frequency.py` | Compares how often each panel protein binds two different locus sets, with a two-proportion z-test. Use when positional metrics are uninformative — notably for proximity labelling, where peak position reflects distance from the bait rather than an RBP footprint. |
+
+### Analysis runners
+
+| sbatch | what it runs |
+|---|---|
+| `run_intersect_inference_bed.sbatch` | Original decoys/splice-site run. |
+| `run_thrap3_intersect.sbatch` | THRAP3 against the full panel. |
+| `run_thrap3_region.sbatch <exonic\|intronic>` | THRAP3 split by transcript region; identical settings so divergence is region, not parameters. |
+| `run_centro_intersect.sbatch` | Centrosome apex CLIP, uncontrolled. |
+| `run_centro_controlled.sbatch <specific\|ntcontrol>` | Centrosome with APEX controls applied. Run **both**; neither is interpretable alone. |
+
+### Python version
+
+`intersect_inference_bed.py` needs the `rbpeek` conda env (Python 3.12). The helper scripts
+above are written to run under **Python 3.6** as well, since they are typically invoked by
+hand on an HPC login node where `python3` is the system interpreter.
+
 ## Notes
 
 - Input coordinates can repeat (duplicate `chr/start/end`); the script keeps **one row per input BED line** and handles duplicates during intersection.
 - Runtime is dominated by the `bedtools groupby` merge and `bedtools intersect` steps for large XL datasets.
-- `-i/--inspect-protein` must match a protein directory name under `--xldir`.
+- `-i/--inspect-protein` matches a **protein directory name** under `--xldir` in merge mode, or the **`group` label** from the samplesheet under `--skip-merge`. The error message on a mismatch lists the available names.
 
