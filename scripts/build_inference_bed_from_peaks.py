@@ -46,6 +46,9 @@ def parse_args():
                    help="How to collapse each merged region to 1 nt (default midpoint)")
     p.add_argument("--keep-scaffolds", action="store_true",
                    help="Keep non-primary contigs; by default only chr1-22,X,Y,M are kept")
+    p.add_argument("-s", "--subtract", nargs="*", default=[], type=Path,
+                   help="Control peak BEDs. Any merged region overlapping one of these "
+                        "(strand-aware) is dropped, leaving only bait-specific loci.")
     p.add_argument("-o", "--outdir", type=Path, required=True, help="Output directory")
     return p.parse_args()
 
@@ -114,6 +117,41 @@ def main():
     with open(str(merged), "w") as fout:
         subprocess.check_call(["bedtools", "merge", "-i", str(allbed), "-s",
                                "-c", "4,5,6", "-o", "distinct,sum,distinct"], stdout=fout)
+
+    if args.subtract:
+        # Subtract BEFORE the reproducibility filter, so a region is judged non-specific on
+        # ANY control evidence rather than only on reproducible control evidence. For a
+        # proximity-labelling bait the background is the thing being controlled for, so the
+        # conservative direction is to drop anything a control saw at all.
+        ctrl_raw = workdir / "control_all.bed"
+        with open(str(ctrl_raw), "w") as fout:
+            for c in args.subtract:
+                if not c.is_file():
+                    sys.exit("control file not found: %s" % c)
+                with open(str(c)) as fin:
+                    for line in fin:
+                        if not line.strip():
+                            continue
+                        col = line.rstrip("\n").split("\t")
+                        if len(col) < 6:
+                            continue
+                        chrom = col[0] if col[0].startswith("chr") else "chr" + col[0]
+                        if chrom == "chrMT":
+                            chrom = "chrM"
+                        fout.write("\t".join([chrom, col[1], col[2], ".", ".", col[5]]) + "\n")
+        ctrl_sorted = workdir / "control_sorted.bed"
+        with open(str(ctrl_sorted), "w") as fout:
+            subprocess.check_call(["sort", "-k1,1", "-k2,2n", str(ctrl_raw)], stdout=fout)
+        kept = workdir / "merged_specific.bed"
+        with open(str(kept), "w") as fout:
+            subprocess.check_call(["bedtools", "intersect", "-a", str(merged),
+                                   "-b", str(ctrl_sorted), "-s", "-v"], stdout=fout)
+        before = sum(1 for _ in open(str(merged)))
+        after = sum(1 for _ in open(str(kept)))
+        print("  subtracted %d control file(s): %d of %d merged regions overlap a control "
+              "and were dropped (%.1f%%)" % (len(args.subtract), before - after, before,
+                                             100.0 * (before - after) / before))
+        merged = kept
 
     print("[3/4] applying reproducibility filter and collapsing to 1 nt anchors")
     hist = Counter()
