@@ -7,3 +7,7 @@ binf_summary.tsv
 *:Zone.Identifier
 Centrosome/work/
 Centrosome/gene_counts/
+# Analysis outputs are transferred from the HPC by hand and not versioned. 109 files,
+# 77.6MB, were untracked in one commit; the blobs stay in history, so this stops the repo
+# growing further rather than shrinking what is already there.
+results/
