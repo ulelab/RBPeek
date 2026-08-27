@@ -1,6 +1,7 @@
 import argparse
 import csv
 import gzip
+import math
 import os
 import re
 import subprocess
@@ -110,6 +111,19 @@ def parse_args():
             "Minimum number of loci with any signal for a protein to be eligible under "
             "--protein-select enrichment or centrality (default 500). Without this the "
             "enrichment fraction is trivially 1.0 for a protein touching a single locus."
+        ),
+    )
+    p.add_argument(
+        "--protein-min-loci-frac",
+        type=float,
+        default=None,
+        help=(
+            "Express the eligibility gate as a FRACTION of the inference loci instead of an "
+            "absolute count, and it scales with the set automatically. Overrides "
+            "--protein-min-loci when given. Use this whenever two runs are meant to be "
+            "compared: an absolute gate makes a smaller set harder to clear, so a protein "
+            "can be ranked in one run and excluded from the other purely on set size, and "
+            "exclusion is indistinguishable from absence in the output."
         ),
     )
     p.add_argument(
@@ -1056,6 +1070,19 @@ def main():
         print(f"Wrote metaprofile plot to: {plot_path}")
         plt.close()
 
+        # Resolve the eligibility gate. A fractional gate is the safe choice when two runs
+        # will be compared, because an absolute one is harsher on the smaller locus set.
+        min_loci_eff = args.protein_min_loci
+        if args.protein_min_loci_frac is not None:
+            if not 0 < args.protein_min_loci_frac <= 1:
+                raise ValueError("--protein-min-loci-frac must be in (0, 1]")
+            min_loci_eff = int(math.ceil(args.protein_min_loci_frac * n_binf))
+            print(
+                f"Eligibility gate: --protein-min-loci-frac {args.protein_min_loci_frac:g} "
+                f"x {n_binf} loci = {min_loci_eff} (overrides --protein-min-loci "
+                f"{args.protein_min_loci})"
+            )
+
         # Heatmap: rank proteins, keep top-K for clustering/tSNE.
         if args.protein_select == "enrichment":
             protein_signal_rank, centrality_scores, centrality_excluded = enrichment_rank(
@@ -1064,19 +1091,19 @@ def main():
                 maxoff_by_protein=maxoff_by_protein,
                 win=args.enrichment_window,
                 min_total=args.centrality_min_total,
-                min_loci=args.protein_min_loci,
+                min_loci=min_loci_eff,
             )
             if not protein_signal_rank:
                 raise ValueError(
                     f"No protein passed --centrality-min-total {args.centrality_min_total:g} "
-                    f"and --protein-min-loci {args.protein_min_loci}. Lower them, or use "
+                    f"and a minimum of {min_loci_eff} loci with signal. Lower them, or use "
                     "--protein-select total."
                 )
             if centrality_excluded:
                 print(
                     f"Enrichment ranking: {len(centrality_excluded)} of {len(protein_names)} "
                     f"proteins excluded (summed total_overlaps < {args.centrality_min_total:g} "
-                    f"or fewer than {args.protein_min_loci} loci with signal)"
+                    f"or fewer than {min_loci_eff} loci with signal)"
                 )
             rank_desc = f"fraction of loci peaking within +/-{args.enrichment_window}nt"
         elif args.protein_select == "centrality":

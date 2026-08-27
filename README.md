@@ -88,6 +88,7 @@ python3 scripts/intersect_inference_bed.py \
 - **`--protein-select`**: `total` (default), `enrichment` (recommended) or `centrality` — how the top-K columns are chosen; see [Protein selection](#protein-selection-total-enrichment-centrality) below.
 - **`--enrichment-window`**: half-width (nt) counted as "on the locus" by `enrichment` ranking (default 5)
 - **`--protein-min-loci`**: minimum loci with signal for a protein to be eligible under `enrichment`/`centrality` (default 500)
+- **`--protein-min-loci-frac`**: express that gate as a **fraction of the inference loci** instead, so it scales with the set. Overrides `--protein-min-loci`. Use it whenever two runs will be compared — see [the eligibility gate](#the-eligibility-gate).
 - **`--centrality-sigma`**: width (nt) of the Gaussian template for centrality ranking (default 5.0)
 - **`--centrality-min-total`**: minimum summed `total_overlaps` for a protein to be eligible under centrality ranking (default 100)
 - **`--exclude-groups`**: comma-separated substrings; panel columns whose group name contains one are dropped before anything is computed (e.g. `--exclude-groups PARCLIP`)
@@ -303,6 +304,10 @@ Precision of the fraction, near 0.30:
 | 5,000 | ±0.006 |
 
 **`--protein-min-loci` is an absolute count, so it does not scale with the inference set.**
+Pass **`--protein-min-loci-frac`** instead whenever two runs will be compared — it expresses
+the gate as a fraction of that run's loci, so both are gated identically in relative terms,
+and the run log prints the value it resolved to.
+
 Comparing two runs of different size therefore gates them unequally: 500 demanded signal at
 1.7% of loci on a 29,018-locus set but 5.8% on an 8,666-locus one, excluding 38 versus 90 of
 302 proteins. A protein can then be ranked in one run and invisible in the other purely from

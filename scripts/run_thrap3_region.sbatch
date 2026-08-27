@@ -66,6 +66,24 @@ mkdir -p "$OUT"
 # so 200 will be more permissive than the 78.3% it kept on run 52008929. The log prints the
 # kept percentage - if it approaches 100%, raise this before reading the heatmap.
 #
+# --protein-min-loci-frac 0.0248 REPLACES the flat --protein-min-loci 500. The gate is
+# load-bearing either way - the enrichment fraction is trivially 1.0 for a protein whose
+# signal touches a single locus - but an ABSOLUTE gate cannot be shared by two runs of
+# different size. Exonic has 20,158 loci and intronic 8,666, so a flat 500 demanded signal at
+# 2.5% of loci in one and 5.8% in the other. Runs 52359304/52359306 show the damage: 38 of
+# 302 proteins excluded from exonic against 90 from intronic, so a protein binding ~4% of loci
+# was ranked in one run and invisible in the other purely on set size - and in the output,
+# exclusion is indistinguishable from absence.
+#
+# 0.0248 is 500/20158: what 500 meant on the exonic set. It resolves to 500 for exonic and 215
+# for intronic, gating both identically in relative terms. The cost is precision on the
+# smaller set - the standard error on an enrichment fraction near 0.30 widens from +/-0.021 at
+# n=500 to +/-0.031 at n=215. The run log prints the resolved value.
+#
+# BOTH REGIONS MUST BE RESUBMITTED regardless: runs 52359304/52359306 predate the chromosome
+# harmonisation fix, so K562-ELAVL1-rep1/rep2 and TRA2B-MDA231-rep1..rep3 contributed nothing
+# to either. Their logs have no "Chromosome naming:" line; the new ones should.
+#
 # --nt-heatmap-window 50 is new and is DISPLAY ONLY: --window stays at 100, so every
 # statistic, the metaprofile, the enrichment ranking and the summary table are identical to
 # what they would be uncropped. It only zooms both nucleotide heatmaps onto the centre.
@@ -83,7 +101,7 @@ python3 scripts/intersect_inference_bed.py \
   --protein-select enrichment \
   --enrichment-window 5 \
   --centrality-min-total 100 \
-  --protein-min-loci 500 \
+  --protein-min-loci-frac 0.0248 \
   --heatmap-min-support 200 \
   --heatmap-scale percentile \
   --heatmap-scale-percentile 99 \
