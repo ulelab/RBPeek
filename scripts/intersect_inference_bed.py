@@ -18,6 +18,28 @@ from matplotlib.patches import Patch
 from scipy.cluster.hierarchy import linkage
 from scipy.spatial.distance import pdist
 
+# Categorical hues for cluster identity, shared by the heatmap colour bar and the tSNE so a
+# cluster is the same colour in both. NOT tab20, which was here before: tab20 is built as
+# light/dark PAIRS, so consecutive clusters differed mainly in lightness. Measured on the
+# first six slots (OKLab dE x100, adjacent pairs): tab20 scores 13.5 on normal vision against
+# a floor of 15 - a fail - and tab10 scores 0.7 under simulated deuteranopia. This order
+# scores 9.1 (CVD, target 8) and 20.8 (normal vision).
+#
+# Caveat worth keeping in mind: those are ADJACENT-pair figures. In a dense intermixed
+# scatter every pair is effectively adjacent, and no six-hue set clears the all-pairs bar
+# here (this one drops to 2.6 under CVD). If clusters still read as one mass, the fix is to
+# facet - one panel per cluster against grey - not more hues.
+CLUSTER_HUES = [
+    "#2a78d6",  # blue
+    "#eb6834",  # orange
+    "#1baf7a",  # green
+    "#eda100",  # amber
+    "#8a63d2",  # violet
+    "#00a3b5",  # teal
+    "#c2477f",  # magenta
+    "#6b7280",  # slate
+]
+
 DEFAULT_GENOME = "/camp/home/jonesm6/home/shared/genomes/hg38/hg38.genome"
 HEATMAP_TOP_PROTEINS = 60
 METAPROFILE_TOP_PROTEINS = 10
@@ -872,6 +894,7 @@ def make_tsne_from_binf_summary(
     random_state: int,
     row_clusters: np.ndarray | None = None,
     feature_proteins: list[str] | None = None,
+    cluster_to_color: dict | None = None,
 ) -> None:
     try:
         from sklearn.manifold import TSNE
@@ -920,18 +943,27 @@ def make_tsne_from_binf_summary(
                 label="Not in heatmap filter",
             )
         if np.any(in_cluster):
-            sc = plt.scatter(
-                embedding[in_cluster, 0],
-                embedding[in_cluster, 1],
-                s=12,
-                alpha=0.85,
-                c=row_clusters[in_cluster],
-                cmap="tab20",
-                edgecolors="none",
-            )
-            plt.colorbar(sc, label="Heatmap row cluster")
-        if np.any(not_in_heatmap):
-            plt.legend(loc="best", frameon=False, fontsize=8)
+            # Cluster id is CATEGORICAL. It used to be handed to plt.scatter as a numeric
+            # array with cmap="tab20" and a colorbar, which renders a 20-hue qualitative map
+            # as a continuous ramp: the reader gets a rainbow scale bar for what are six
+            # discrete groups, and the hues do not match the heatmap's own cluster colours.
+            # Draw one series per cluster instead, in the SAME colours the heatmap uses, so
+            # C3 in this plot is C3 over there.
+            for cid in sorted(np.unique(row_clusters[in_cluster])):
+                m = row_clusters == cid
+                colour = (cluster_to_color or {}).get(int(cid))
+                plt.scatter(
+                    embedding[m, 0],
+                    embedding[m, 1],
+                    s=12,
+                    alpha=0.85,
+                    color=colour,
+                    edgecolors="none",
+                    label=f"C{int(cid)}",
+                )
+        if np.any(not_in_heatmap) or np.any(in_cluster):
+            plt.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), frameon=False,
+                       fontsize=8, title="Locus cluster")
         if not (np.any(not_in_heatmap) or np.any(in_cluster)):
             plt.scatter(embedding[:, 0], embedding[:, 1], s=12, alpha=0.8, edgecolors="none")
     else:
@@ -940,7 +972,7 @@ def make_tsne_from_binf_summary(
     plt.ylabel("tSNE-2")
     n_feat = len(total_cols)
     plt.title(f"tSNE ({n_feat} protein features, logistic-scaled)")
-    plt.tight_layout()
+    plt.tight_layout(rect=[0.0, 0.0, 0.85, 1.0])
     plt.savefig(out_path, dpi=200)
     plt.close()
     print(f"Wrote tSNE plot to: {out_path} (perplexity={used_perplexity})")
@@ -1230,48 +1262,81 @@ def main():
 
         cluster_ids_sorted = sorted(np.unique(row_clusters))
         n_colors = max(len(cluster_ids_sorted), 1)
-        if n_colors <= 20:
-            cluster_palette = sns.color_palette("tab20", n_colors=n_colors)
+        if n_colors <= len(CLUSTER_HUES):
+            cluster_palette = CLUSTER_HUES[:n_colors]
         else:
             cluster_palette = sns.color_palette("husl", n_colors=n_colors)
         cluster_to_color = {cid: cluster_palette[i] for i, cid in enumerate(cluster_ids_sorted)}
         row_colors = [cluster_to_color[int(cid)] for cid in row_clusters_sorted]
 
         if args.heatmap_scale == "percentile":
-            cbar_label = f"log1p support (clipped at {args.heatmap_scale_percentile:g}th pct)"
+            cbar_label = f"log1p support\n({args.heatmap_scale_percentile:g}th pct clip)"
             # Pin the range so empty cells read as the bottom of the palette rather than
             # being stretched by whatever the observed minimum happens to be.
             scale_kwargs = {"vmin": 0.0, "vmax": 1.0}
         else:
-            cbar_label = "support (logistic; empty = 0.5)"
+            cbar_label = "support\n(logistic; empty = 0.5)"
             scale_kwargs = {}
+        # Transposed: proteins on the ROWS so their names read horizontally on the left,
+        # instead of ~20 vertical labels along the bottom. Loci go on the x-axis, where they
+        # are unlabelled anyway (there are thousands), and their cluster colour bar moves
+        # from row_colors to col_colors. col_linkage was cosine distance BETWEEN PROTEINS, so
+        # after the transpose it is the row linkage; loci stay in their pre-sorted
+        # cluster order, so the locus axis is not re-clustered.
+        n_prot = heatmap_display.shape[1]
         heatmap_fig = sns.clustermap(
-            heatmap_display,
-            row_cluster=False,
-            col_cluster=(heatmap_display.shape[1] > 1),
-            col_linkage=col_linkage,
-            row_colors=row_colors,
+            heatmap_display.T,
+            row_cluster=(n_prot > 1),
+            row_linkage=col_linkage,
+            col_cluster=False,
+            col_colors=row_colors,
             cmap="viridis",
-            xticklabels=cluster_protein_names,
-            yticklabels=False,
-            figsize=(9, 10),
+            yticklabels=cluster_protein_names,
+            xticklabels=False,
+            figsize=(11, max(5.0, 0.34 * n_prot + 2.0)),
             cbar_kws={"label": cbar_label},
             **scale_kwargs,
         )
-        heatmap_fig.ax_heatmap.set_xlabel("Proteins")
-        heatmap_fig.ax_heatmap.set_ylabel("Inference BED loci")
+        heatmap_fig.ax_heatmap.set_xlabel("Inference BED loci")
+        # Protein names on the LEFT. seaborn puts the row dendrogram there and the tick
+        # labels on the right, so swap them: the dendrogram moves to the right of the
+        # heatmap (x-inverted so its root still points away from the data) and the labels
+        # take the space it vacated.
+        _hm = heatmap_fig.ax_heatmap
+        _rd = heatmap_fig.ax_row_dendrogram
+        _p_hm, _p_rd = _hm.get_position(), _rd.get_position()
+        _rd.set_position([_p_hm.x1 + 0.012, _p_rd.y0, _p_rd.width, _p_rd.height])
+        _rd.invert_xaxis()
+        _hm.yaxis.tick_left()
+        _hm.yaxis.set_label_position("left")
+        _hm.set_ylabel("Proteins")
+        plt.setp(_hm.get_yticklabels(), rotation=0, fontsize=8)
         legend_handles = [
             Patch(facecolor=cluster_to_color[cid], edgecolor="none", label=f"C{cid}") for cid in cluster_ids_sorted
         ]
         heatmap_fig.ax_heatmap.legend(
             handles=legend_handles,
-            title="Row clusters (k-means, binary)",
+            title="Locus cluster",
             loc="upper left",
-            bbox_to_anchor=(1.02, 1.0),
+            bbox_to_anchor=(1.0 + (_p_rd.width / max(_p_hm.width, 1e-9)) + 0.05, 1.0),
             frameon=False,
+            fontsize=8,
+            title_fontsize=9,
         )
+        # Default clustermap puts the colourbar top-left, where it now sits on top of the
+        # relocated row labels. Park it under the legend on the right instead.
+        _p_leg_x = 1.0 + (_p_rd.width / max(_p_hm.width, 1e-9)) + 0.05
+        heatmap_fig.ax_cbar.set_position([
+            _p_hm.x0 + _p_leg_x * _p_hm.width,
+            _p_hm.y0 + 0.05 * _p_hm.height,
+            0.015,
+            max(0.12, 0.28 * _p_hm.height),
+        ])
+        heatmap_fig.ax_cbar.tick_params(labelsize=7)
+        heatmap_fig.ax_cbar.set_ylabel(cbar_label, fontsize=8)
+
         heatmap_path = outdir / "binf_support_heatmap.png"
-        heatmap_fig.savefig(heatmap_path, dpi=200)
+        heatmap_fig.savefig(heatmap_path, dpi=200, bbox_inches="tight")
         plt.close(heatmap_fig.fig)
         print(f"Wrote clustered heatmap to: {heatmap_path}")
         cluster_sizes = {int(cid): int(np.sum(row_clusters == cid)) for cid in np.unique(row_clusters)}
@@ -1457,6 +1522,7 @@ def main():
             if args.tsne:
                 tsne_path = outdir / "binf_summary_tsne.png"
                 make_tsne_from_binf_summary(
+                    cluster_to_color=cluster_to_color,
                     tsv_path=tsv_path,
                     out_path=tsne_path,
                     perplexity=args.tsne_perplexity,
