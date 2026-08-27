@@ -465,6 +465,8 @@ metaprofile by its own width.
 | script | purpose |
 |---|---|
 | `compare_binding_frequency.py` | Compares how often each panel protein binds two different locus sets, with a two-proportion z-test. Use when positional metrics are uninformative — notably for proximity labelling, where peak position reflects distance from the bait rather than an RBP footprint. |
+| `plot_cluster_metaprofile_at_loci.py` | True metaprofile for one heatmap cluster's proteins, computed around a DIFFERENT locus set. Recomputes the counts for just those proteins - the per-nucleotide vector is not in `binf_summary.tsv`, which keeps only five per-locus summary statistics. Imports the offset arithmetic from `intersect_inference_bed.py` so slop, strand handling and `--panel-anchor` match a full run. |
+| `plot_offset_distribution.py` | Lighter alternative when a rerun is not wanted: distribution of each locus's single strongest offset, straight from `binf_summary.tsv`. Not a metaprofile. |
 | `build_gene_matrix_from_summaries.py` | Flow `*.summary_gene.tsv` files -> gene x sample counts and RPKM matrices. Gene length is in the input, so no GTF is needed; the library denominator is every row's cDNA including intergenic, which is what the file's own `cDNA %` is computed against. |
 | `plot_expression_heatmap.py` | Clustered heatmap of normalised expression per gene across samples, for a gene list (`.xlsx` first column, or plain text). Computes RPKM from raw counts with `--gtf`, or takes `--already-normalised`. Reports unmatched genes rather than dropping them silently, including Excel's date-mangled `MARCH`/`SEPT` symbols. |
 
