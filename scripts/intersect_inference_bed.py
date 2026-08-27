@@ -409,14 +409,31 @@ def merge_protein_crosslinks(protein_dir: Path, merged_dir: Path) -> Path:
     return out_path
 
 
-def _first_chrom(path: Path):
-    """First data chromosome in a BED/BED.GZ, or None if the file has no usable rows."""
+def _chrom_style(path: Path, sample: int = 2000):
+    """
+    True if this BED is chr-prefixed, False if Ensembl-style, None if it has no data rows.
+
+    Decided by MAJORITY over the first `sample` data rows, not by the first row alone.
+    Sampling one line is wrong for a very common case: `sort -k1,1` is ASCII, so uppercase
+    scaffold names (GL000009.2, KI270302.1) sort BEFORE "chr", and a perfectly chr-prefixed
+    panel file whose first row is a scaffold looks Ensembl-style. That misread 278 of 302
+    columns as needing a rewrite on one run - harmless, since the rewrite only ever ADDS a
+    prefix to names lacking one, but 278 pointless file copies per run.
+    """
+    n_chr = n_other = 0
     with _open_text_auto(path) as fh:
         for line in fh:
             if not line.strip() or line.startswith(("#", "track", "browser")):
                 continue
-            return line.split("\t")[0]
-    return None
+            if line.split("\t")[0].startswith("chr"):
+                n_chr += 1
+            else:
+                n_other += 1
+            if n_chr + n_other >= sample:
+                break
+    if n_chr + n_other == 0:
+        return None
+    return n_chr >= n_other
 
 
 def harmonise_panel_chroms(protein_sources, binf_path: Path, tmpdir: Path):
@@ -431,21 +448,20 @@ def harmonise_panel_chroms(protein_sources, binf_path: Path, tmpdir: Path):
     Only mismatched files are rewritten, into tmpdir, so a correctly-named panel costs one
     line read per file and nothing else.
     """
-    binf_chrom = _first_chrom(binf_path)
-    if binf_chrom is None:
+    binf_chr = _chrom_style(binf_path)
+    if binf_chr is None:
         return protein_sources
-    binf_chr = binf_chrom.startswith("chr")
 
     fixed = []
     renamed = []
     empty = []
     for name, path in protein_sources:
-        first = _first_chrom(path)
-        if first is None:
+        style = _chrom_style(path)
+        if style is None:
             empty.append(name)
             fixed.append((name, path))
             continue
-        if first.startswith("chr") == binf_chr:
+        if style == binf_chr:
             fixed.append((name, path))
             continue
         out = tmpdir / ("panel_chrfix_%s.bed" % re.sub(r"[^A-Za-z0-9_.-]", "_", name))
