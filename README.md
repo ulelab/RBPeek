@@ -465,6 +465,8 @@ metaprofile by its own width.
 | script | purpose |
 |---|---|
 | `compare_binding_frequency.py` | Compares how often each panel protein binds two different locus sets, with a two-proportion z-test. Use when positional metrics are uninformative — notably for proximity labelling, where peak position reflects distance from the bait rather than an RBP footprint. |
+| `build_gene_matrix_from_summaries.py` | Flow `*.summary_gene.tsv` files -> gene x sample counts and RPKM matrices. Gene length is in the input, so no GTF is needed; the library denominator is every row's cDNA including intergenic, which is what the file's own `cDNA %` is computed against. |
+| `plot_expression_heatmap.py` | Clustered heatmap of normalised expression per gene across samples, for a gene list (`.xlsx` first column, or plain text). Computes RPKM from raw counts with `--gtf`, or takes `--already-normalised`. Reports unmatched genes rather than dropping them silently, including Excel's date-mangled `MARCH`/`SEPT` symbols. |
 
 ### Analysis runners
 

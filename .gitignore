@@ -6,3 +6,4 @@ __pycache__/
 binf_summary.tsv
 *:Zone.Identifier
 Centrosome/work/
+Centrosome/gene_counts/
