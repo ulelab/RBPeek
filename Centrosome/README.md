@@ -14,7 +14,7 @@ than mm39 (195.1 Mb). Human, safe against the human panel.
 
 **The bait is a compartment, not a protein.** "Centro_apex" is a subcellular capture, so
 there is no self-column to exclude from the panel and no assay-matched control to nominate
-as `--inspect-protein`. Read results as "RBPs at centrosome-localised sites", not "RBPs
+to nominate as a bait-matched control. Read results as "RBPs at centrosome-localised sites", not "RBPs
 partnering with protein X".
 
 ## Replicates
@@ -70,7 +70,11 @@ sbatch scripts/run_centro_intersect.sbatch
 
 No exon/intron split for this analysis — combined regions only.
 
-Settings match THRAP3 run 52008929 except `--protein-min-loci 300` (not 500). That gate is
+Settings match the THRAP3 runs. NOTE: the per-sample eligibility gates these runs were
+tuned with (`--protein-min-loci`, `--centrality-min-total`) no longer exist — every sample is
+now ranked, and `protein_ranking.tsv` reports `loci_with_signal` so a top-ranked sample
+resting on a handful of loci is visible rather than silently filtered. The old note read:
+That gate was
 an absolute count of loci where a protein has signal, and this set is 8,218 loci against
 THRAP3's 29,018 — 500 would demand signal at 6.1% of loci here versus 1.7% there, excluding
 much more of the panel. 300 asks for 3.7%; the standard error on an enrichment fraction near
@@ -78,13 +82,11 @@ much more of the panel. 300 asks for 3.7%; the standard error on an enrichment f
 
 ## What to check in the log
 
-- **`Enrichment ranking: N of 302 proteins excluded`** — if N is large, `--protein-min-loci`
-  is biting and should come down further.
-- **row filter kept %** — `--heatmap-min-support 200` sums support across all panel columns,
-  so it does not scale with locus count. If it keeps ~everything, raise it. The absolute form
-  is kept here deliberately: these runs are compared against each other at fixed panel width.
-  `--heatmap-min-support-percentile` is the size-matched alternative, and is what the THRAP3
-  runs use because their exonic and intronic locus sets differ 5x in median row support.
+- **`loci_with_signal` in `protein_ranking.tsv`** — check it for anything near the top of
+  the ranking. The enrichment fraction is trivially 1.0 for a sample touching one locus.
+- **row filter kept %** — `--support-pct 10` drops the bottom decile of loci by summed
+  support, plus every zero-support locus. It replaced an absolute threshold, which could not
+  be shared between runs over different locus sets.
 - **`-i HNRNPC-Hela-iCLIP`** is carried over from the THRAP3 runs for continuity only; there
   is no bait-matched reason for it here. Swap it once the ranking shows what is actually
   enriched.

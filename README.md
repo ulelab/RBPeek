@@ -1,14 +1,20 @@
 # `intersect_inference_bed.py`
 
-Summarize CLIP/iCLIP/eCLIP-style **crosslink (xl) support** around loci from an **inference BED** across *multiple proteins*, producing:
+Summarise CLIP/iCLIP/eCLIP peak support around the loci of an **inference BED** across a
+panel of samples, answering "which RBPs co-occupy these sites, and with what profile shape".
 
-- a **metaprofile plot** (primary output): Gaussian-smoothed **mean** peak support across all loci from \(-window:+window\), for the top 10 proteins of the **same ranking that picks the heatmap's columns**, with a right-hand axis giving the equivalent total summed score
-- an **optional per-locus summary table** (TSV): per-locus signal shape metrics for each protein
-- **per-protein merged XL BEDs** written under `<xldir>/merged/` (merge mode only; not under `--skip-merge`)
-- a **clustered heatmap** across the top-K proteins (`binf` rows x proteins columns; values = per-locus total support, scaled per `--heatmap-scale`)
-- a **ranked panel-sample table** (`protein_ranking.tsv`): every column ranked by mean peak support, carrying its central-enrichment score alongside
-- a **heatmap cluster assignment table** for downstream cluster-specific metaprofiles (unless `--no-clustering`)
-- an optional **single-protein nucleotide heatmap** (`binf` rows x nt columns) via `-i/--inspect-protein`
+Every run writes five things:
+
+| file | what it is |
+|---|---|
+| `metaprofile.png` | Gaussian-smoothed mean peak support vs offset, for the top `--top-proteins` samples, with a right-hand axis giving the equivalent total summed score |
+| `binf_support_heatmap.png` | loci x samples, values = per-locus total support |
+| `protein_ranking.tsv` | every panel sample with **both** rankings — depth and central enrichment — side by side |
+| `binf_summary.tsv` | per-locus shape statistics for every sample |
+| `binf_summary_tsne.png` | with `--tsne` |
+
+Passing `-n/--n-clusters` adds k-means groups over the loci, `binf_heatmap_clusters.tsv`, and
+one metaprofile per cluster.
 
 This repo also carries the analysis wrappers built around the tool. See
 [Repository layout](#repository-layout) for what each script does, and
@@ -17,164 +23,119 @@ for the two analyses and their findings.
 
 ## Inputs
 
-### Crosslinks directory (`--xldir/-x`)
+### Samplesheet (`-s/--samplesheet`) and panel root (`-x/--xldir`)
 
-`--xldir` should point to a directory with **one subdirectory per protein**, e.g.:
-
-```text
-xldir/
-  PRPF8/
-    PRPF8_HepG2_1_R1.genome.xl.bed
-    PRPF8_HepG2_2_R1.genome.xl.bed
-  FUS/
-    ...
-```
-
-Each protein directory must contain one or more `*genome.xl.bed` files in **BED6** format:
+A TSV with two columns:
 
 ```text
-chrom  start  end  name  score  strand
+file	group
+eCLIP-Clippy/HepG2-BCLAF1-merged.xl_..._Peaks.bed	HepG2-BCLAF1-eCLIP
 ```
 
-- **score** (column 5) is read but not used directly in merging; merging uses site presence per file
-- **strand** (column 6) is required (overlaps are strand-aware)
+`file` is resolved relative to `--xldir`; `group` becomes the sample label in every plot and
+table. Files may be BED6+ or `.bed.gz`. A missing file is a hard error, not a skipped row.
 
-If `--xldir` itself contains `*genome.xl.bed` (no subdirs), the script treats `--xldir` as a single-protein directory (legacy layout).
+### Inference BED (`-b/--bed`)
 
-**Recommended to use a separate control directory for each protein crosslink profile generated **
-example: xl/prpf8 xl/prpf8ctrl xl/fus xl/fusctrl
+BED6+, strand in column 6; extra columns are ignored. Loci should be **1 nt** — the script
+deposits a panel interval's whole score at one offset, so a wider locus smears the
+metaprofile by its own width. `build_inference_bed_from_peaks.py` produces 1 nt anchors.
 
-### Inference BED (`--bed/-b`)
-
-The inference BED must have **at least 6 columns** with strand in column 6:
-
-```text
-chrom  start  end  name  score  strand  ...
-```
-
-Only the first 6 columns are required; extra columns are ignored.
+Coordinates may repeat; the script keeps one row per input line and handles duplicates
+during intersection.
 
 ### Genome sizes (`--genome`)
 
-Used for `bedtools slop` when expanding inference loci by `--window`.
-
-Created by using samtools faidx or cut -f1,2 on reference genome fasta index file (fa.fai file ext.)
+Used for `bedtools slop` when expanding loci by `--window`. Make it with `samtools faidx`
+then `cut -f1,2` on the `.fa.fai`.
 
 ## CLI
 
 ```bash
 python3 scripts/intersect_inference_bed.py \
-  -x <xldir> \
-  -b <inference.bed> \
-  --window 100 \
-  --gaussian-sigma 2.0 \
-  -i PRPF8 \
-  --table \
-  -o results/
+  -x ../CLIP \
+  -b THRAP3/THRAP3_merged_min2rep_anchors.bed \
+  -s THRAP3/RBPeekSamplesheet_eCLIP.tsv \
+  -o results/thrap3 \
+  --panel-anchor midpoint \
+  --tsne
 ```
 
 ### Options
 
-- **`-x/--xldir`**: xl root directory (required)
-- **`-b/--bed`**: inference BED (required)
-- **`--window`**: half-window size (default 100). Output offsets run from \(-window..+window\).
-- **`--gaussian-sigma`**: sigma parameter for Gaussian metaprofile smoothing (default 2.0)
-- **`--panel-anchor`**: `start` (default) or `midpoint` — which point of each `--xldir` interval carries its score. Use `midpoint` whenever the panel holds **peaks** rather than 1 nt crosslink sites; see [Panel anchor](#panel-anchor-start-vs-midpoint) below.
-- **`--nt-heatmap-window`**: crop the `-i/--inspect-protein` nucleotide heatmap to +/- this many nt for **display only** (default: full `--window`). `--window` still governs what is counted, so all statistics, the metaprofile, the enrichment ranking and the summary table are unchanged.
-- **`--heatmap-min-support`**: minimum summed support across **all** xl groups for a locus to enter the heatmap/clustering (default 50). Scales with panel width, so raise it for wide panels — see the note under the clustered heatmap.
-- **`--heatmap-min-support-percentile`**: express that filter as "drop the bottom P% of loci" instead, and always drop zero-support loci. Overrides `--heatmap-min-support`. Use it whenever two runs will be compared — see [the row filter](#the-heatmap-row-filter).
-- **`--heatmap-scale`**: `logistic` (default) or `percentile` — colour scaling for the clustered heatmap; see [Heatmap colour scaling](#heatmap-colour-scaling) below.
-- **`--heatmap-scale-percentile`**: percentile of non-zero values mapped to the top of the colour range under `--heatmap-scale percentile` (default 99.0)
-- **`--protein-select`**: `total` (default), `enrichment` (recommended) or `centrality` — how the top-K columns are chosen; see [Protein selection](#protein-selection-total-enrichment-centrality) below.
-- **`--enrichment-window`**: half-width (nt) counted as "on the locus" by `enrichment` ranking (default 5)
-- **`--protein-min-loci`**: minimum loci with signal for a protein to be eligible under `enrichment`/`centrality` (default 500)
-- **`--protein-min-loci-frac`**: express that gate as a **fraction of the inference loci** instead, so it scales with the set. Overrides `--protein-min-loci`. Use it whenever two runs will be compared — see [the eligibility gate](#the-eligibility-gate).
-- **`--centrality-sigma`**: width (nt) of the Gaussian template for centrality ranking (default 5.0)
-- **`--centrality-min-total`**: minimum summed `total_overlaps` for a protein to be eligible under centrality ranking (default 100)
-- **`--exclude-groups`**: comma-separated substrings; panel columns whose group name contains one are dropped before anything is computed (e.g. `--exclude-groups PARCLIP`)
-- **`--no-clustering`**: skip k-means row clustering entirely. The heatmap is still written, with loci ordered by total support; the tSNE becomes a single-colour scatter; `binf_heatmap_clusters.tsv` is not written. Incompatible with `--cluster-metaprofiles`.
-- **`--cluster-metaprofiles`**: if set, write one metaprofile plot per heatmap cluster (`metaprofile_cluster_C*.png`)
-- **`--n-clusters`**: number of k-means clusters on the binarized heatmap row matrix (default 20; capped by number of filtered rows)
-- **`--cluster-top-proteins`**: top K XL groups used for heatmap/clustering/tSNE features (default 60)
-- **`--metaprofile-top-proteins`**: top K proteins plotted in global/per-cluster metaprofiles (default 10). These are the first K of the **same** `--protein-select` ranking that picks the heatmap's columns, so the metaprofile is always a subset of the heatmap; capped at `--cluster-top-proteins`.
-- **`-i/--inspect-protein`**: optional protein name for an extra per-nucleotide heatmap for that protein
-- **`--skip-merge`**: skip per-protein merge and use direct BED/BED.GZ inputs from `--xldir`
-- **`-s/--samplesheet`**: optional TSV (`file`, `group`) used with `--skip-merge`; `file` is resolved relative to `--xldir`
-- **`--table`**: if set, write the per-locus summary TSV
-- **`--tsne`**: if set, generate tSNE from `binf_summary.tsv` using the same top-K `*_total_overlaps` columns as the heatmap (requires `--table`)
-- **`--tsne-perplexity`**: tSNE perplexity (default 30; clipped to valid range)
-- **`--tsne-random-state`**: tSNE random seed (default 42)
-- **`-o/--outdir`**: directory for plot + TSV (default `results/` in the current working directory)
+**Required**
+
+- **`-x/--xldir`** — root the samplesheet's `file` paths resolve against
+- **`-b/--bed`** — inference BED
+- **`-s/--samplesheet`** — TSV with `file` and `group` columns
+
+**Counting**
+
+- **`--window`** — half-window in bp (default 100); offsets run `-window..+window`
+- **`--panel-anchor`** — `start` (default) or `midpoint`. **Use `midpoint` for any panel of peaks**; see [Panel anchor](#panel-anchor-start-vs-midpoint).
+- **`--gaussian-sigma`** — metaprofile smoothing sigma (default 2.0)
+- **`--genome`** — genome sizes file
+
+**Choosing what to plot**
+
+- **`--protein-select`** — `enrichment` (default) or `total`; see [Protein selection](#protein-selection-total-vs-enrichment)
+- **`--enrichment-window`** — half-width (nt) counted as "on the locus" (default 5)
+- **`--top-proteins`** — how many samples reach the heatmap, metaprofile and tSNE (default 20). One number for all three, so the figures always show the same set.
+
+**Heatmap**
+
+- **`--support-pct`** — drop the bottom P% of loci by summed support (default 10); zero-support loci are always dropped. See [the row filter](#the-heatmap-row-filter).
+- **`--heatmap-scale`** — `percentile` (default) or `logistic`; see [colour scaling](#heatmap-colour-scaling)
+- **`--heatmap-scale-percentile`** — non-zero percentile mapped to the top of the range (default 99)
+
+**Optional extras**
+
+- **`-n/--n-clusters`** — k-means the loci into this many groups. Omitted by default: loci are ordered by total support. Passing it also writes `binf_heatmap_clusters.tsv` and one metaprofile per cluster, and colours the tSNE.
+- **`--tsne`**, **`--tsne-perplexity`** — tSNE of the loci over the selected samples (default perplexity 30)
 
 ## What the script does
 
-### 1) Merge xl sites per protein
+### 1) Chromosome naming is harmonised automatically
 
-For each protein directory, all `*genome.xl.bed` files are merged by exact locus and strand.
-Each site is tagged by source filename, then grouped so the merged score becomes:
+A panel file named Ensembl-style (`1`) against a `chr1` inference BED produces **zero**
+overlaps, and the failure is silent — the run completes and the column reads as an RBP that
+binds nothing. Five columns were lost that way before this was fixed.
 
-- group key: `(chrom, start, end, strand)`
-- aggregation: `count_distinct(file)` (number of xl files containing that exact site+strand)
-
-Output:
-
-```text
-<xldir>/merged/<protein>_merged.bed
-```
-
-Chromosome names are normalized to `chr*` (e.g. `1` → `chr1`) to match typical BED naming.
-
-### 1b) Alternate input mode (`--skip-merge`)
-
-When `--skip-merge` is used, the script does not merge protein subdirectories.
-
-- with `-s/--samplesheet`: reads a TSV with `file` and `group` columns
-  - `file` paths are relative to `--xldir`
-  - `group` becomes the protein label in plots/tables
-- without `--samplesheet`: uses all BED/BED.GZ files directly in `--xldir`
-
-### 1c) Chromosome naming is harmonised automatically
-
-Merge mode normalises panel chromosome names to `chr*`; `--skip-merge` does not, so a panel
-file named Ensembl-style (`1`) against a `chr1` inference BED used to produce **zero**
-overlaps. That failure is silent — the run completes and the column simply reads as an RBP
-that binds nothing. Five columns were lost that way before this was fixed.
-
-The script now compares each panel file's first data chromosome against the inference BED's
-convention and rewrites only the mismatched ones into its temp directory, logging:
+The script takes a **majority vote** over each panel file's first 2,000 data chromosomes and
+rewrites only the mismatched files into its temp directory, logging:
 
 ```text
 Chromosome naming: rewrote 5 panel column(s) to match the inference BED (chr-prefixed style): ...
 ```
 
-A correctly-named panel costs one line read per file and is otherwise untouched. Panel files
-with no data rows are warned about, since they look identical in the output.
+Majority vote, not the first row: BEDs are ASCII-sorted, which puts `GL`/`KI` scaffolds
+before `chr1`, so sampling one line misclassified 278 of 302 columns. Panel files with no
+data rows are warned about, since they look identical in the output.
 
 ### 2) Build per-locus signal vectors
 
-Each inference locus is expanded by `--window` (bedtools slop). The script intersects merged xl sites with these windows **strand-aware** (`bedtools intersect -s`).
+Each locus is expanded by `--window` (`bedtools slop`), then intersected with each panel file
+**strand-aware** (`bedtools intersect -s`). For each locus the script builds a vector of
+length `2*window+1` holding the summed panel **score** at each relative offset.
 
-For each locus, it builds a vector of length \(2*window+1\), where each position stores the **summed file-support score** at that relative offset.
+Offsets are strand-aligned:
 
-Offsets are **strand-aligned**:
-
-- locus `+`: offset \(=\) `xl_start - locus_start`
-- locus `-`: offset \(=\) `-(xl_start - locus_start)` (so + offsets are always in the locus’ 5'→3' direction)
+- locus `+`: offset = `anchor - locus_start`
+- locus `-`: offset = `-(anchor - locus_start)`, so positive offsets are always 5'→3'
 
 ### Panel anchor: `start` vs `midpoint`
 
-A panel interval's **entire score lands on one offset**, it is not spread across its width.
-Which offset that is comes from `--panel-anchor`.
+A panel interval's **entire score lands on one offset**; it is not spread across its width.
+`--panel-anchor` picks which offset.
 
-For the 1 nt crosslink sites this script was designed around, the two settings are
-identical (`start == midpoint` when `end == start + 1`). They diverge as soon as the panel
-holds **peaks**, and the divergence is not a harmless shift:
+For 1 nt crosslink sites the two settings are identical (`start == midpoint` when
+`end == start + 1`). They diverge as soon as the panel holds **peaks**, and not harmlessly:
 
 - a peak of width `w` centred on a `+` strand locus scores at **`-w/2`**
 - the strand flip sends the same peak on a `-` strand locus to **`+w/2`**, because a peak's
   genomic start is its 3' end there
 
-So real central binding is split into a spurious **`+/-w/2` doublet with a hole at 0**.
+Real central binding is therefore split into a spurious **`+/-w/2` doublet with a hole at 0**.
 Measured on a panel of Clippy peaks (mean width ~11 bp) against 29,018 centred loci:
 
 | `--panel-anchor` | `+` strand median | `-` strand median | separation |
@@ -182,22 +143,21 @@ Measured on a panel of Clippy peaks (mean width ~11 bp) against 29,018 centred l
 | `start` | -5.0 | +5.0 | **10.0 nt** |
 | `midpoint` | 0.0 | 0.0 | **0.0 nt** |
 
-**Use `midpoint` for any peak-based panel.** It is a no-op for crosslink input, so it is
-safe to leave on. `start` remains the default only so existing runs reproduce byte for byte.
+**Use `midpoint` for any peak-based panel.** It is a no-op for crosslink input, so it is safe
+to leave on. `start` remains the default only so existing runs reproduce byte for byte.
 
-Note that `max_binding_offset` in the summary table centres a 5 nt sliding window, so it
-carries its own quantisation of a couple of nt independently of this setting.
+Note `max_binding_offset` in the summary table centres a 5 nt sliding window, so it carries
+its own quantisation of a couple of nt independently of this setting.
 
 ### Heatmap colour scaling
 
-`logistic` (default) centres on the matrix **median**. The locus x protein matrix is sparse,
-so that median is ~0 and **every empty cell maps to exactly 0.5** — mid-palette. The whole
-range below 0.5 goes unused and the colourbar starts at 0.5, which is why a sparse run looks
-uniformly flat no matter how the row filter is set.
+`percentile` (default) applies `log1p`, then scales against the given percentile of the
+**non-zero** values and clips. Empty cells stay at 0, so the full palette carries signal.
 
-`percentile` applies `log1p`, then scales against the given percentile of the **non-zero**
-values and clips. Empty cells stay at 0, so the full palette carries signal. On a sparse test
-matrix (65% of cells empty):
+`logistic` centres on the matrix **median**. The locus x sample matrix is sparse, so that
+median is ~0 and **every empty cell maps to exactly 0.5** — mid-palette. The whole range
+below 0.5 goes unused and the colourbar starts at 0.5, which is why a sparse run looked
+uniformly flat no matter how the row filter was set. On a sparse test matrix (65% empty):
 
 | scaling | range | empty cells render at | median non-zero cell |
 |---|---|---:|---:|
@@ -207,287 +167,143 @@ matrix (65% of cells empty):
 The `log1p` step is what makes this usable rather than merely correct. Support counts are
 heavy-tailed — non-zero median 10 against a maximum of 333 on that matrix — so scaling raw
 values against the 99th percentile put the median cell at **0.11**, *darker* than the
-logistic scaling it replaces. After `log1p` the same settings put it at 0.53.
+logistic scaling it replaced. After `log1p` the same settings put it at 0.53.
 
-Two things this also affects:
-
-- the **column dendrogram**, built from cosine distances on the scaled matrix. Under
-  `logistic` every column carries a large constant 0.5 component from its empty cells, which
-  compresses the distances between them; under `percentile` the distances reflect actual
-  co-occurrence.
-- **not** the row clusters, which come from `(matrix > 0)` binarisation and are unaffected by
-  any colour scaling.
-
-Raising `--heatmap-min-support` is *not* an alternative fix. It culls rows rather than
-rescaling colour, and because row support correlates with inference-BED reproducibility it
-biases which loci survive.
+This also drives the **column dendrogram**, built from cosine distances on the scaled matrix:
+under `logistic` every column carries a large constant 0.5 component from its empty cells,
+which compresses the distances; under `percentile` they reflect actual co-occurrence. It does
+**not** affect the row clusters, which come from `(matrix > 0)` binarisation.
 
 ### The heatmap row filter
 
-Loci enter the heatmap and clustering only if their support clears a threshold. Support here
-is the **summed score column of every overlapping panel interval, across every column and the
-whole window** — so it has no intrinsic scale. It rises with panel width, with sequencing
-depth, and with how bound the region is, and none of those are properties of the locus.
+Loci enter the heatmap only if their support clears `--support-pct`. Support here is the
+**summed score of every overlapping panel interval, across every column and the whole
+window** — so it has no intrinsic scale. It rises with panel width, with sequencing depth,
+and with how bound the region is, and none of those are properties of the locus.
 
-That is why an absolute `--heatmap-min-support` cannot be shared by two runs. Measured on the
-THRAP3 exonic and intronic subsets, median row support was **1,594** and **296** — a 5.4x
-gap — so a flat threshold of 200 dropped **11.3%** of exonic loci and **43.5%** of intronic
+That is why this is a percentile rather than an absolute cut. Measured on the THRAP3 exonic
+and intronic subsets, median row support was **1,594** and **296** — a 5.4x gap — so the flat
+threshold of 200 used previously dropped **11.3%** of exonic loci and **43.5%** of intronic
 ones. The intronic heatmap was a top-56% subset of its loci while the exonic one was a
 top-89% subset, and the two were being read side by side.
 
-`--heatmap-min-support-percentile P` fixes that by dropping the bottom P% instead, and is the
-right choice whenever two runs will be compared. It **always** drops zero-support loci as
-well, whatever the percentile resolves to. That clause is load-bearing: 18.6% of the THRAP3
-intronic loci have no support from any panel column, so the 10th percentile of that set is
-literally 0 and a bare percentile would keep ~750 blank heatmap rows. At `P=10` the exonic
-set resolves to a threshold of 166 and loses 10.0%; the intronic set resolves to 0, the zero
-clause fires, and it loses 18.6%. The residual asymmetry is then real emptiness rather than
-an artefact of scale.
+Loci with **zero** support are always dropped, whatever the percentile resolves to. That
+clause is load-bearing: 18.6% of the THRAP3 intronic loci have no support from any panel
+column, so the 10th percentile of that set is literally 0 and a bare percentile would keep
+~750 blank heatmap rows. At `--support-pct 10` the exonic set resolves to a threshold of 166
+and loses 10.0%; the intronic set resolves to 0, the zero clause fires, and it loses 18.6%.
+The residual asymmetry is then real emptiness rather than an artefact of scale.
 
-The same argument applies to `--protein-min-loci` vs `--protein-min-loci-frac` for the
-column-eligibility gate — see [the eligibility gate](#the-eligibility-gate).
+Nothing is lost either way: `binf_summary.tsv` and `protein_ranking.tsv` cover every locus
+and every sample, unfiltered.
 
-### Protein selection: `total`, `enrichment`, `centrality`
+### Protein selection: `total` vs `enrichment`
 
-`--cluster-top-proteins K` picks which panel columns reach the heatmap, clustering, the tSNE
-and — as its first `--metaprofile-top-proteins` entries — the metaprofile. `--protein-select`
-decides *how* they are picked.
+`--top-proteins K` picks how many panel samples reach the heatmap, the metaprofile and the
+tSNE. `--protein-select` decides *how* they are picked.
 
-`total` (default) ranks by summed `total_overlaps`. That is a **depth-biased** measure: a
-deeply sequenced, peak-rich dataset scores highly whether or not its binding has anything
-to do with the inference loci.
+`total` ranks by summed support. That is **depth-biased**: a deeply sequenced sample outranks
+a shallow one whose binding is far better positioned. In a controlled test — decoys built
+from a real replicate at matched depth, one shifted 40 nt and one jittered — the shifted
+decoy ranked **3rd**, above genuine replicates.
 
-`centrality` ranks by Pearson r between each protein's mean profile and a Gaussian of width
-`--centrality-sigma` centred on the locus. Pearson r is **scale-free**, so a shallow dataset
-with sharply centred binding can outrank a deep one with a flat profile.
+`enrichment` (default) asks, per locus, whether the sample's strongest binding lands within
+`--enrichment-window` of the locus, then takes the fraction of that sample's signal-bearing
+loci where it does. It is depth-free.
 
-`enrichment` (**recommended**) is also depth-free but works **per locus**: for each protein,
-the fraction of its signal-bearing loci whose `max_binding_offset` falls within
-`--enrichment-window`. Prefer it over `centrality` — see below for why.
+**They are only weakly related, and neither is simply right.** On the THRAP3 run, Spearman
+between the two is **+0.35** across 224 samples. The consequence is concrete: HNRNPC ranks
+**1st** by enrichment but **116th** by depth, while BCLAF1 — THRAP3's known complex partner —
+ranks **5th** by depth and **16th** by enrichment.
 
-#### Why `enrichment` over `centrality`
+The trade-off:
 
-Once the panel is centred with `--panel-anchor midpoint`, nearly every mean profile peaks at
-0, so correlating against a centred template stops discriminating on **position** and starts
-discriminating on how tidy a dataset's **baseline** is. That systematically favours assays
-with low background. Measured on a 297-column run:
+- **depth** finds partners that bind abundantly nearby, but ranks a deeply sequenced sample
+  above a well-positioned shallow one, and cannot tell "binds this locus" from "binds
+  everything".
+- **enrichment** finds partners that bind *at* the locus, but a partner binding 5–10 nt away
+  scores nothing, and the metric is trivially 1.0 for a sample touching a single locus.
 
-| | `centrality` | `enrichment` |
-|---|---|---|
-| assay mix of top 20 | 10 PAR-CLIP / 9 eCLIP / 1 iCLIP | 19 eCLIP / 1 iCLIP |
-| vs panel composition (75% eCLIP, 23% PAR-CLIP) | PAR-CLIP **2.2x** enriched | matches |
-| BCLAF1 (known complex partner of the bait) | **absent from top 20** | 16th |
-| top-ranked columns | ORF1/L1RE1-PARCLIP (LINE-1, repeat-derived) | both HNRNPC datasets |
+Because of that last point there is deliberately **no eligibility gate**. Gates on minimum
+loci made two runs over different locus sets incomparable and rendered "excluded"
+indistinguishable from "absent" in the output. Instead `protein_ranking.tsv` reports
+`loci_with_signal` for every sample, so a top-ranked sample resting on 3 loci is visible.
 
-The two rankings shared **zero** of their top 20 on the same data.
-
-`--protein-min-loci` is load-bearing for `enrichment`: the fraction is trivially 1.0 for a
-protein whose signal touches a single locus. Ungated, the top of that ranking was a PAR-CLIP
-column with one locus and a summed score of 5.
-
-Validated against two decoys built from a real replicate at matched depth — one displaced
-40 nt, one with positions jittered +/-80 nt:
-
-| column | summed overlaps | rank by `total` | centrality r | rank by `centrality` |
-|---|---:|---:|---:|---:|
-| genuine replicate A | 160,016 | 2 | +0.813 | **1** |
-| genuine replicate B | 164,279 | 1 | +0.809 | **2** |
-| genuine replicate C | 104,214 | 5 | +0.808 | **3** |
-| genuine replicate D | 43,386 | 6 | +0.796 | **4** |
-| decoy, jittered | 157,163 | 4 | +0.292 | 5 |
-| decoy, shifted 40 nt | 158,592 | 3 | **-0.003** | 6 |
-
-Under `total` both decoys outrank two genuine replicates on depth alone. Under `centrality`
-every genuine replicate outranks both decoys, including one at a quarter of their depth.
-The jittered decoy retains r=+0.292 because jitter is itself centred, leaving broad central
-enrichment inside the window — a broad hump is genuinely less centred, not a scoring flaw.
-
-Proteins below `--centrality-min-total` are excluded before ranking, since a profile built
-from a handful of overlaps can score a near perfect correlation off a single spike at 0.
-Flat profiles are excluded too, Pearson r being undefined at zero variance. Selected
-columns are logged with both their r and their total, so a high-r/low-signal column is
-visible rather than silently shaping the heatmap.
-
-#### The eligibility gate
-
-`enrichment` scores a **fraction with a variable denominator** — of the loci where a protein
-has any signal, how many peak within `--enrichment-window`. A protein with signal at one
-locus that happens to peak on target scores a perfect **1.000**, beating a protein at 0.380
-built on 7,968 loci. Ungated, the top of one real ranking was a PAR-CLIP column with **one**
-locus and a summed score of 5.
-
-Two gates apply, and a protein must clear both or it is dropped from the ranking entirely:
-
-- `--centrality-min-total` (default 100) — enough total signal
-- `--protein-min-loci` (default 500) — enough loci for the fraction to mean anything
-
-Precision of the fraction, near 0.30:
-
-| loci | standard error |
-|---:|---|
-| 100 | ±0.046 |
-| 300 | ±0.026 |
-| 500 | ±0.021 |
-| 5,000 | ±0.006 |
-
-**`--protein-min-loci` is an absolute count, so it does not scale with the inference set.**
-Pass **`--protein-min-loci-frac`** instead whenever two runs will be compared — it expresses
-the gate as a fraction of that run's loci, so both are gated identically in relative terms,
-and the run log prints the value it resolved to.
-
-Comparing two runs of different size therefore gates them unequally: 500 demanded signal at
-1.7% of loci on a 29,018-locus set but 5.8% on an 8,666-locus one, excluding 38 versus 90 of
-302 proteins. A protein can then be ranked in one run and invisible in the other purely from
-set size — and **exclusion is indistinguishable from absence** in the output. When comparing
-runs, size-match the gate (`500 x n_small/n_large`) and check the `N of M proteins excluded`
-line in both logs.
+Run both and compare — the ranking table is identical in shape either way, so only
+`selected_for_figures` differs.
 
 ## Outputs
 
-### Metaprofile plot (always)
+### `metaprofile.png` (always)
 
-File: `<outdir>/metaprofile.png`
+- **left axis**: `counts.mean(axis=0)`, Gaussian-smoothed. The denominator is **every** locus,
+  including those where the sample has no signal, so a curve is diluted by non-binding loci
+  rather than describing the sites it does bind.
+- **right axis**: the same curve times the locus count, i.e. total summed panel score. One
+  constant rescale, so the two axes agree pixel for pixel — the only normalisation that can
+  honestly share an axis. Anything per-sample (dividing each curve by its own maximum)
+  reorders the curves and needs its own panel.
+- curves are the top `--top-proteins` of the `--protein-select` ranking — the **same** set the
+  heatmap shows, so the two figures never disagree about which samples matter
+- legend entries carry each sample's grand total; curves past the tenth switch linestyle,
+  since the colour cycle is 10 long
 
-For each protein:
+### `binf_support_heatmap.png` (always)
 
-- compute `total_overlaps = sum(vector)` for each locus
-- compute the **mean** support vector across all loci (`counts.mean(axis=0)`) — note the
-  denominator is **every** locus, including those where the protein has no signal at all, so
-  a curve is diluted by non-binding loci rather than describing the sites it does bind
-- smooth with a **Gaussian kernel** controlled by `--gaussian-sigma`
-- plot the **top K** from `--metaprofile-top-proteins` (default 10), taken from the **same
-  `--protein-select` ranking that picks the heatmap's columns**. The metaprofile is therefore
-  always a subset of the heatmap, and the two figures never disagree about which proteins
-  matter. (Before this, the metaprofile ranked by summed profile signal — pure depth — while
-  the heatmap ranked by enrichment, so they routinely showed different proteins.)
-- **left axis**: mean peak support across all loci. **Right axis**: the same curve multiplied
-  by the locus count, i.e. total summed panel score. Because the locus count is one constant,
-  the two axes are the same curve at two scales and agree pixel for pixel — the only
-  normalisation that can honestly share an axis. Anything per-protein (dividing each curve by
-  its own maximum, say) reorders the curves and needs its own panel.
-- legend on the right, each entry annotated with that protein's grand total
+- rows: the selected samples, labelled `NAME [rank]` by `--protein-select` position
+- columns: loci passing `--support-pct`
+- values: per-locus total support, scaled per `--heatmap-scale`
+- **row order** comes from the sample dendrogram (cosine distance, average linkage), which
+  groups by co-occurrence — *not* by rank. The bracketed rank makes the two orderings
+  comparable, and makes it obvious when a visually dominant row is one the ranking placed
+  near the cut.
+- **locus order**: by total support descending; with `-n`, by cluster then support
 
-### Clustered heatmap (always)
+### `protein_ranking.tsv` (always)
 
-File: `<outdir>/binf_support_heatmap.png`
-
-- rows: `binf` loci
-- columns: the **top K** XL groups from `--cluster-top-proteins` (default 60), ranked per `--protein-select`, not the full protein list
-- values: per-locus total support (`total_overlaps`) transformed by logistic scaling
-- pre-filter rows: see [the heatmap row filter](#the-heatmap-row-filter) below
-- **row clustering**: build a **binary** matrix over the top-K proteins (`1` if support `> 0` at that locus/protein, else `0`), then **k-means** (`--n-clusters`, default 20) on those binary rows. Skipped entirely under `--no-clustering`.
-- **row order** (no row dendrogram): sort by cluster id (ascending), then by total support across all proteins (descending) within each cluster. Under `--no-clustering`, by total support alone.
-- **column clustering only**: cosine distance + average linkage between protein columns (computed on the scaled matrix before row reorder; row order does not change column vectors for linkage)
-- heatmap **values** shown are still **logistic-scaled** continuous totals (viridis)
-
-### Ranked panel samples (always)
-
-File: `<outdir>/protein_ranking.tsv`
-
-One row per panel column, sorted by `mean_peak_support` descending. Columns:
+One row per panel sample, sorted by total peak support. Columns:
 
 | column | meaning |
 |---|---|
-| `rank` | position by `mean_peak_support` |
 | `sample` | samplesheet `group` |
-| `mean_peak_support` | `total_peak_support / n_loci` — the metaprofile's left axis, integrated |
+| `mean_peak_support` | total / n_loci — the metaprofile's left axis, integrated |
 | `total_peak_support` | summed panel score across every locus and offset |
-| `loci_with_signal`, `frac_loci_with_signal` | how much of the locus set this column touches at all |
-| `<select>_score` | the `--protein-select` score — `enrichment_score` is the fraction of signal-bearing loci peaking within `--enrichment-window`; `NA` if the column was gated out |
-| `<select>_rank` | rank by that score; `NA` if gated out |
-| `eligible` | passed `--protein-min-loci*` and `--centrality-min-total` |
-| `selected_for_heatmap` | reached the heatmap's top K |
+| `loci_with_signal`, `frac_loci_with_signal` | how much of the locus set this sample touches at all |
+| `frac_centred` | fraction of signal-bearing loci peaking within `--enrichment-window` |
+| `total_rank`, `enrichment_rank` | **both** rankings, always, whichever `--protein-select` was used |
+| `selected_for_figures` | reached the top `--top-proteins` |
 
-This table carries **both** competing answers to "which RBP co-occupies these sites" side by
-side: depth (`mean_peak_support`) and central enrichment (`frac centred`). A column that is
-deep but binds 30 nt away ranks 1st on the former and last on the latter, and the table makes
-that visible instead of forcing the choice up front.
+Because both rankings are always written, an `enrichment` run and a `total` run over the same
+loci are comparable row for row — only `selected_for_figures` differs.
 
-### Heatmap cluster assignments (unless `--no-clustering`)
+### `binf_summary.tsv` (always)
 
-File: `<outdir>/binf_heatmap_clusters.tsv`
+One row per locus, and for each sample five statistics over its `-window..+window` vector:
+`_total_overlaps`, `_variance`, `_pearson_median_skew`, `_kurtosis_excess`,
+`_max_binding_offset` (centre of the highest-summing 5 nt sliding window; 0 for empty loci).
 
-- one row per input `binf` locus (same order as summary table)
-- columns:
-  - `binf_chr_start_end`
-  - `chrom`, `start`, `end`
-  - `row_sum_support` (sum of `total_overlaps` across **all** XL groups)
-  - `passes_heatmap_filter` (`True`/`False`, per `--heatmap-min-support` / `--heatmap-min-support-percentile`)
-  - `heatmap_cluster`: `NA` if row fails heatmap filter; otherwise integer k-means cluster id (`1..k`)
+The `_total_overlaps` suffix is load-bearing — `compare_binding_frequency.py`,
+`plot_offset_distribution.py` and `plot_cluster_metaprofile_at_loci.py` all key off it.
+
+### `binf_summary_tsne.png` (with `--tsne`)
+
+Features are the `*_total_overlaps` columns for the selected samples, logistic-scaled to match
+the heatmap. One point per locus. With `-n`, coloured by cluster in the **same** hues the
+heatmap's cluster bar uses, so `C3` here is `C3` there; loci failing the row filter are grey.
+Without `-n`, a single-colour scatter.
+
+### `binf_heatmap_clusters.tsv` and `metaprofile_cluster_C*.png` (with `-n`)
+
+k-means on the **binarised** matrix (`support > 0`), so clusters describe *which* samples are
+present, not how much. The TSV carries `binf_chr_start_end`, `chrom`, `start`, `end`,
+`row_sum_support`, `passes_heatmap_filter` and `heatmap_cluster` (`NA` if the locus failed
+the filter).
 
 This file is the **only** carrier of cluster membership, and both
 `scripts/plot_offset_distribution.py --clusters` and
-`scripts/plot_cluster_metaprofile_at_loci.py --clusters` read it. `--no-clustering` suppresses
-it, so those two scripts need a run that kept clustering.
+`scripts/plot_cluster_metaprofile_at_loci.py --clusters` read it.
 
-### Cluster metaprofiles (optional)
-
-Enabled by `--cluster-metaprofiles`.
-
-- one metaprofile plot per heatmap row cluster
-- files: `<outdir>/metaprofile_cluster_C1.png`, `<outdir>/metaprofile_cluster_C2.png`, ...
-- for each cluster: mean support profile is computed only from loci assigned to that cluster
-
-### tSNE from summary table (optional)
-
-Enabled by `--table --tsne`.
-
-File: `<outdir>/binf_summary_tsne.png`
-
-- input features: `*_total_overlaps` columns for the **same top-K proteins** as the heatmap (`--cluster-top-proteins`)
-- feature transform: same logistic scaling used for the global heatmap
-- one point per `binf` row
-- points: colored by k-means cluster id (`1..k`), in the **same** hues the heatmap's cluster bar uses, so `C3` here is `C3` there; rows not in the heatmap filter are light gray. Under `--no-clustering` this becomes a single-colour scatter.
-- requires `scikit-learn` in the environment
-
-### Single-protein nucleotide heatmap (optional)
-
-Enabled by `-i/--inspect-protein`.
-
-File: `<outdir>/binf_<protein>_nt_support_heatmap.png`
-
-- rows: `binf` loci
-- columns: nucleotide positions from `-window..+window`
-- values: merged support score at each relative nucleotide offset for the selected protein
-- pre-filter rows: keep loci with `sum(across nt positions) >= 10` for the selected protein
-- hierarchical clustering on rows only; nucleotide columns stay in genomic order (`-window..+window`)
-
-### Summary table (optional)
-
-Enabled by `--table`.
-
-File: `<outdir>/binf_summary.tsv`
-
-- **Column 1**: `binf_chr_start_end` formatted as `chr_start_end`
-- For each protein, five columns are added:
-  - `<protein>_total_overlaps`
-  - `<protein>_variance`
-  - `<protein>_pearson_median_skew`
-  - `<protein>_kurtosis_excess`
-  - `<protein>_max_binding_offset`
-
-These metrics are computed from the per-locus vector across \(-window..+window\):
-
-- **total_overlaps**: \(\sum\) of xl scores across the full vector
-- **variance**: variance of xl scores across the full vector
-- **pearson_median_skew**: Pearson’s median skewness
-
-  \[
-  3 \cdot \frac{\text{mean} - \text{median}}{\text{std}}
-  \]
-
-  (defined as 0 when `std == 0`).
-
-- **kurtosis_excess**: Fisher excess kurtosis; Positive values indicate leptokurtic distribution with strong tailedness while negative values are strongly platykurtic
-
-  \[
-  \frac{\mu_4}{\sigma^4} - 3
-  \]
-
-- **max_binding_offset**: offset of maximal binding based on **sliding 5-nt window sums**
-  - compute all 5-nt window sums along the vector
-  - take the window with the maximum sum
-  - report the **center** position of that window as an offset
+One metaprofile is written per cluster, over the same samples as the global one.
 
 ## Repository layout
 
@@ -530,8 +346,8 @@ metaprofile by its own width.
 | sbatch | what it runs |
 |---|---|
 | `run_intersect_inference_bed.sbatch` | Original decoys/splice-site run. |
-| `run_thrap3_intersect.sbatch` | THRAP3 against the full panel. |
-| `run_thrap3_region.sbatch <exonic\|intronic>` | THRAP3 split by transcript region; identical settings so divergence is region, not parameters. |
+| `run_thrap3_intersect.sbatch [enrichment\|total]` | THRAP3 against the eCLIP panel, all anchors. |
+| `run_thrap3_region.sbatch <exonic\|intronic> [enrichment\|total]` | THRAP3 split by transcript region; identical settings so divergence is region, not parameters. Second argument switches the ranking and the output directory, for comparing the two. |
 | `run_centro_intersect.sbatch` | Centrosome apex CLIP, uncontrolled. |
 | `run_centro_controlled.sbatch <specific\|ntcontrol>` | Centrosome with APEX controls applied. Run **both**; neither is interpretable alone. |
 
@@ -543,7 +359,6 @@ hand on an HPC login node where `python3` is the system interpreter.
 
 ## Notes
 
-- Input coordinates can repeat (duplicate `chr/start/end`); the script keeps **one row per input BED line** and handles duplicates during intersection.
-- Runtime is dominated by the `bedtools groupby` merge and `bedtools intersect` steps for large XL datasets.
-- `-i/--inspect-protein` matches a **protein directory name** under `--xldir` in merge mode, or the **`group` label** from the samplesheet under `--skip-merge`. The error message on a mismatch lists the available names.
+- Runtime is dominated by `bedtools intersect`, once per panel column.
+- k-means and tSNE use a fixed seed (`RANDOM_STATE = 42`). It used to be a flag; nobody varied it, and a run that reproduces is worth more than one that can be reseeded.
 

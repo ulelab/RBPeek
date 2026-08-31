@@ -63,36 +63,28 @@ echo "inference loci: $(wc -l < "$BINF")"
 
 mkdir -p "$OUT"
 
-# --protein-min-loci 100, the SAME absolute value for both runs. Matching it matters more
-# than tuning it: the differential is only meaningful across proteins that cleared the gate
-# in both runs, and the two sets differ in size (2,106 vs 4,284). 100 is low enough for the
-# smaller set to retain most of the panel. The enrichment fraction is correspondingly
-# imprecise (SE ~ +/-0.04 at n=100), which is another reason to read the differential rather
-# than the rank.
-# --protein-nt-heatmap was removed from the tool: the metaprofile now takes its top proteins
-# from the same enrichment ranking that picks the heatmap's columns, so it already shows the
-# heatmap's proteins as profiles. Clustering is KEPT here - the Centrosome analysis reads
-# cluster membership downstream via plot_offset_distribution.py and
-# plot_cluster_metaprofile_at_loci.py, both of which need binf_heatmap_clusters.tsv.
+# Settings match the THRAP3 runs - see scripts/run_thrap3_region.sbatch for the reasoning.
+#
+# The per-sample eligibility gates these runs were originally tuned with are gone: every
+# sample is now ranked, and protein_ranking.tsv reports loci_with_signal, so a sample topping
+# the ranking on a handful of loci is visible rather than silently filtered. Check that
+# column before trusting anything near the top.
+#
+# -n 6 is kept HERE and not in the THRAP3 runs: the Centrosome analysis reads cluster
+# membership downstream via plot_offset_distribution.py --clusters and
+# plot_cluster_metaprofile_at_loci.py --clusters, both of which need binf_heatmap_clusters.tsv.
 python3 scripts/intersect_inference_bed.py \
   -x ../CLIP \
   -b "$BINF" \
   -s RBPeekSamplesheet.tsv \
-  --skip-merge \
-  --table \
   -o "$OUT" \
   --window 100 \
-  --nt-heatmap-window 50 \
   --panel-anchor midpoint \
   --protein-select enrichment \
   --enrichment-window 5 \
-  --centrality-min-total 100 \
-  --protein-min-loci 100 \
-  --heatmap-min-support 200 \
   --heatmap-scale percentile \
   --heatmap-scale-percentile 99 \
-  --cluster-metaprofiles \
+  --top-proteins 20 \
+  --support-pct 10 \
   --n-clusters 6 \
-  --cluster-top-proteins 20 \
-  --metaprofile-top-proteins 10 \
   --tsne

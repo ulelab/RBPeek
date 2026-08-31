@@ -126,24 +126,21 @@ top-level `RBPeekSamplesheet.tsv` to restore all of them.
   leave on if the panel is later switched to `../CLIP/*-merged-xls/*.xl.bed.gz` (268 files),
   which remains the better long-term input for nucleotide-resolution questions.
 
-- **Read positional structure off `metaprofile.png`.** It now draws its top 10 from the same
-  enrichment ranking that picks the heatmap's 20 columns, so the two figures agree on which
-  proteins matter, and the separate `protein_nt_metaprofile_heatmap.png` it used to need has
-  been removed. Do **not** read positional structure off the `-i/--inspect-protein` plot: it
-  is one row per *locus*, hierarchically clustered with average linkage on sparse data, which
-  chains — a 2-way cut of a 4,000-row reproduction split 3,999 vs 1, so its apparent row
-  groups are not real sub-populations. These runs no longer pass `-i`.
-- **The heatmap row filter is now a percentile**, `--heatmap-min-support-percentile 10`, not
-  an absolute cut. Row support is the summed score of every overlapping panel interval across
-  every column, so it has no intrinsic scale: median row support was 1,594 on the exonic
-  subset against 296 on the intronic one, and the flat 200 used previously therefore dropped
-  11.3% of exonic loci against 43.5% of intronic ones. The percentile also always drops
-  zero-support loci — 18.6% of the intronic set — so a run where the percentile resolves to 0
-  cannot produce blank heatmap rows.
-- **These runs pass `--no-clustering`**, so there is no `binf_heatmap_clusters.tsv` and no
-  `metaprofile_cluster_C*.png`. `protein_ranking.tsv` is the replacement: every panel sample
-  ranked by mean peak support with its `frac centred` score alongside, which is the table to
-  read when weighing depth against central enrichment.
+- **Read positional structure off `metaprofile.png`.** It draws its samples from the same
+  ranking that picks the heatmap's columns, so the two figures agree on which samples matter.
+  The separate `protein_nt_metaprofile_heatmap.png` and the per-locus `--inspect-protein`
+  plot have both been removed: the latter clustered loci with average linkage on sparse data,
+  which chains — a 2-way cut of a 4,000-row reproduction split 3,999 vs 1, so its apparent
+  row groups were not real sub-populations.
+- **The heatmap row filter is a percentile**, `--support-pct 10`. Row support is the summed
+  score of every overlapping panel interval across every column, so it has no intrinsic
+  scale: median row support was 1,594 on the exonic subset against 296 on the intronic one,
+  and the flat 200 used previously dropped 11.3% of exonic loci against 43.5% of intronic
+  ones. Zero-support loci are always dropped — 18.6% of the intronic set — so a run whose
+  percentile resolves to 0 cannot produce blank heatmap rows.
+- **These runs do not cluster** (no `-n`), so there is no `binf_heatmap_clusters.tsv` and no
+  `metaprofile_cluster_C*.png`. `protein_ranking.tsv` carries both the depth and the
+  enrichment ranking for every sample, which is the table to read when weighing the two.
 - **Clippy parameterisation differs across the panel.** THRAP3 and the PAR-CLIP set use
   `minHeightAdjust1.0_minPromAdjust1.0`; the eCLIP set uses `stdev1.0`. This affects the
   panel columns' peak-calling sensitivity relative to each other.

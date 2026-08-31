@@ -18,10 +18,8 @@ python3 scripts/intersect_inference_bed.py \
   -x ../CLIP \
   -b decoys/Decoys_proteincoding_splicescores.bed \
   -s RBPeekSamplesheet.tsv \
-  --skip-merge \
-  --table \
   -o results \
-  --cluster-metaprofiles \
+  --top-proteins 20 \
+  --support-pct 10 \
   --n-clusters 6 \
-  --tsne \
-  -i K562-KHSRP-eCLIP
+  --tsne

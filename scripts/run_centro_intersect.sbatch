@@ -51,43 +51,30 @@ echo "inference loci: $(wc -l < "$BINF")"
 
 mkdir -p "$OUT"
 
-# Settings carried over from THRAP3 run 52008929 - see scripts/run_thrap3_intersect.sbatch
-# for the reasoning behind each. Two deliberate differences:
+# Settings match the THRAP3 runs - see scripts/run_thrap3_region.sbatch for the reasoning.
 #
-# --protein-min-loci 300 rather than 500. The gate is an ABSOLUTE count of loci where a
-# protein has signal, but this inference set is 8,218 loci against THRAP3's 29,018, so 500
-# would demand signal at 6.1% of loci here versus 1.7% there, excluding far more of the
-# panel. 300 asks for 3.7%. The cost is precision on the enrichment fraction: the standard
-# error on a fraction near 0.30 goes from +/-0.021 at n=500 to +/-0.027 at n=300, still well
-# inside the ~0.10 spread the top 20 usually covers. Raise it back to 500 if the selected
-# columns look thin.
+# The per-sample eligibility gates these runs were originally tuned with are gone: every
+# sample is now ranked, and protein_ranking.tsv reports loci_with_signal, so a sample topping
+# the ranking on a handful of loci is visible rather than silently filtered. Check that
+# column before trusting anything near the top.
+#
+# -n 6 is kept HERE and not in the THRAP3 runs: the Centrosome analysis reads cluster
+# membership downstream via plot_offset_distribution.py --clusters and
+# plot_cluster_metaprofile_at_loci.py --clusters, both of which need binf_heatmap_clusters.tsv.
 #
 # No exon/intron split for this analysis, by request - combined regions only.
-# --protein-nt-heatmap was removed from the tool: the metaprofile now takes its top proteins
-# from the same enrichment ranking that picks the heatmap's columns, so it already shows the
-# heatmap's proteins as profiles. Clustering is KEPT here - the Centrosome analysis reads
-# cluster membership downstream via plot_offset_distribution.py and
-# plot_cluster_metaprofile_at_loci.py, both of which need binf_heatmap_clusters.tsv.
 python3 scripts/intersect_inference_bed.py \
   -x ../CLIP \
   -b "$BINF" \
   -s RBPeekSamplesheet.tsv \
-  --skip-merge \
-  --table \
   -o "$OUT" \
   --window 100 \
-  --nt-heatmap-window 50 \
   --panel-anchor midpoint \
   --protein-select enrichment \
   --enrichment-window 5 \
-  --centrality-min-total 100 \
-  --protein-min-loci 300 \
-  --heatmap-min-support 200 \
   --heatmap-scale percentile \
   --heatmap-scale-percentile 99 \
-  --cluster-metaprofiles \
+  --top-proteins 20 \
+  --support-pct 10 \
   --n-clusters 6 \
-  --cluster-top-proteins 20 \
-  --metaprofile-top-proteins 10 \
   --tsne \
-  -i HNRNPC-Hela-iCLIP
