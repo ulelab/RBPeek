@@ -451,6 +451,7 @@ interprets its outputs.
 |---|---|
 | `build_inference_bed_from_peaks.py` | **General.** Replicate Clippy peak calls -> inference BED. Normalises chromosome names, merges strand-aware, keeps regions supported by `--min-reps` replicates, collapses each to a 1 nt midpoint anchor. `--subtract` drops regions overlapping control peaks, for proximity-labelling baits. |
 | `build_thrap3_inference_bed.py` | The THRAP3-specific original, kept for reproducibility of that analysis. Superseded by the general script above. |
+| `merge_replicate_peaks.py` | Pools replicate peak BEDs by SUMMING scores at identical chrom/start/end/strand, then reformats to BED6. Exact-match grouping, so it pools signal rather than assessing reproducibility - for the latter use the overlap-based merge above. |
 | `split_inference_bed_by_region.py` | Splits an inference BED into **exonic** and **intronic** subsets from a GTF. Strand-aware, exon-priority (all transcripts' exons merged first), so the two sets are disjoint by construction. Defaults to GENCODE v39. |
 
 Why each transformation is needed is documented in the scripts themselves; the short version
