@@ -18,11 +18,11 @@
 # strand-aware merge, >=2/4 replicate support, collapsed to 1 nt midpoint anchors.
 #
 # Caveat carried into interpretation: THRAP3 is HEK293 iCLIP, while the panel is
-# HepG2/K562 eCLIP, HeLa iCLIP and PAR-CLIP. Cross-cell-line differences are
+# HepG2/K562 eCLIP in the eCLIP-only sheet this now uses. Cross-cell-line differences are
 # confounded with cross-RBP differences, so rank RBPs against each other rather than
-# reading absolute enrichment. HNRNPC-Hela-iCLIP is the assay-matched control and is
-# used as --inspect-protein for that reason; HNRNPC also appears in four independent
-# assay/cell combinations, so its four columns act as an internal consistency check.
+# reading absolute enrichment. HNRNPC appears as both HepG2 and K562 eCLIP, so its two
+# columns still act as an internal consistency check - but within one assay now, since
+# HNRNPC-Hela-iCLIP is not in the eCLIP sheet.
 
 set -euo pipefail
 
@@ -70,53 +70,63 @@ mkdir -p "$OUT"
 # signal touches one locus: ungated, the top of this ranking was WDR33-PARCLIP with a single
 # locus and a summed score of 5.
 #
-# --exclude-groups PARCLIP. NOTE this is belt-and-braces, not the fix: recomputed on run
-# 52005272, the best PAR-CLIP column ranks 95th of 293 under enrichment and the top 20 is
-# byte-identical whether PAR-CLIP is kept or dropped. It DOES cost ELAVL1, which exists only
-# as ELAVL1-PARCLIP - drop this one line to keep ELAVL1 in the panel.
+# -s THRAP3/RBPeekSamplesheet_eCLIP.tsv restricts the panel to the 224 eCLIP columns of 299,
+# dropping 68 PAR-CLIP and 7 iCLIP, so assay is uniform and a difference between columns
+# cannot be an assay difference. State the cost alongside the results: HNRNPC-Hela-iCLIP was
+# the only assay-matched column (THRAP3 is itself iCLIP) and HNRNPC agreeing with ITSELF
+# across both cell line AND assay was the strongest result of the earlier runs. HNRNPC keeps
+# HepG2 and K562, but that replication is now within-assay. TRA2B-MDA231-iCLIP goes too.
+# Point -s back at RBPeekSamplesheet.tsv to restore both. This also makes the old
+# --exclude-groups PARCLIP argument moot - PAR-CLIP is simply not in the sheet.
 #
-# --heatmap-min-support 200, deliberately low. This filter is NOT a peak count: row support
-# is the summed SCORE column of every overlapping panel interval across all 297 columns and
-# the whole +/-100nt window, so its scale is arbitrary (median 1,053 on the last run).
+# --heatmap-min-support-percentile 10 replaces the absolute --heatmap-min-support 200. Row
+# support is the summed SCORE of every overlapping panel interval across every column, so it
+# has no intrinsic scale and an absolute threshold means different things in different runs -
+# median row support was 1,594 on the exonic subset against 296 on the intronic one. The
+# percentile also always drops zero-support loci, whatever it resolves to, so a locus set
+# where more than 10% of loci are empty cannot end up with blank heatmap rows.
 #
-# It also correlates with THRAP3 reproducibility - median row support is 821 at 2/4 reps and
-# 2,324 at 4/4 - so a high threshold silently culls the least reproducible loci. Retention
-# of 2/4-rep vs 4/4-rep loci: 87%/87% at 50, 76%/82% at 200, 61%/74% at 500, 29%/53% at
-# 2000. 200 keeps the bias mild while still dropping near-empty rows from the k-means.
+# Raising the filter never fixed a dark heatmap; --heatmap-scale percentile did. It log1p's
+# the matrix and scales against the 99th percentile of non-zero cells, so empty cells sit at 0
+# and the whole palette carries signal. logistic_scale() centred on the matrix median, which
+# is ~0 when the matrix is sparse, so every empty cell rendered at exactly 0.5 and the palette
+# below 0.5 went unused. On a sparse test matrix (65% empty): logistic gave [0.50,1.00] with
+# empty cells at 0.50; percentile gives [0.00,1.00] with empty at 0.00 and the median non-zero
+# cell at 0.53. The log1p step matters - support counts are heavy-tailed, and without it the
+# median non-zero cell rendered at 0.11, darker than before.
 #
-# Raising it does NOT fix the dark heatmap. That comes from logistic_scale() centring on the
-# matrix median, which is ~0 for a sparse matrix, so every empty cell renders at exactly 0.5
-# and the whole palette below 0.5 goes unused - which is why the last run's colourbar
-# started at 0.5. --heatmap-scale percentile is the actual fix: it log1p's the matrix and
-# scales against the 99th percentile of non-zero cells, so empty cells sit at 0 and the full
-# palette carries signal. On a sparse test matrix (65% empty): logistic gave range
-# [0.50,1.00] with empty cells at 0.50; percentile gave [0.00,1.00] with empty cells at 0.00
-# and the median non-zero cell at 0.53. The log1p step matters - support counts are
-# heavy-tailed, and without it the median non-zero cell rendered at 0.11, darker than before.
+# --no-clustering. k-means on binarised presence answers "what kinds of locus are there",
+# a Centrosome question; here the question is which panel columns are enriched at THRAP3
+# sites. It removes binf_heatmap_clusters.tsv and the per-cluster metaprofiles, orders the
+# heatmap's locus axis by total support, and leaves the tSNE one colour. protein_ranking.tsv
+# is the replacement: every panel sample ranked by mean peak support, carrying frac_centred
+# alongside, so depth and central enrichment sit in one table instead of one being picked in
+# advance.
 #
-# Nothing is lost either way: binf_summary.tsv and binf_heatmap_clusters.tsv keep all 29,018
-# loci with a passes_heatmap_filter flag, and the metaprofile, the proteins x nt heatmap and
-# the centrality ranking are all computed over every locus, unfiltered.
+# No -i and no --protein-nt-heatmap: the metaprofile now takes its top 10 from the SAME
+# enrichment ranking that picks the heatmap's 20 columns, which was the only job the
+# proteins x nt heatmap had.
+#
+# Nothing is lost by the row filter either way: binf_summary.tsv keeps all 29,018 loci, and
+# the metaprofile, the ranking and the enrichment scores are computed over every locus,
+# unfiltered.
 python3 scripts/intersect_inference_bed.py \
   -x ../CLIP \
   -b "$BINF" \
-  -s RBPeekSamplesheet.tsv \
+  -s THRAP3/RBPeekSamplesheet_eCLIP.tsv \
   --skip-merge \
   --table \
   -o "$OUT" \
   --window 100 \
   --panel-anchor midpoint \
-  --protein-nt-heatmap \
   --protein-select enrichment \
   --enrichment-window 5 \
   --centrality-min-total 100 \
   --protein-min-loci 500 \
-  --heatmap-min-support 200 \
+  --heatmap-min-support-percentile 10 \
   --heatmap-scale percentile \
   --heatmap-scale-percentile 99 \
-  --cluster-metaprofiles \
-  --n-clusters 6 \
+  --no-clustering \
   --cluster-top-proteins 20 \
   --metaprofile-top-proteins 10 \
-  --tsne \
-  -i HNRNPC-Hela-iCLIP
+  --tsne

@@ -93,8 +93,16 @@ THRAP3 is the **inference BED (rows)**, not a panel column — it is absent from
 
 HNRNPC appears in four independent assay/cell combinations — if its co-binding signal is
 real it should be consistent across all four, which makes it a free internal control.
-`HNRNPC-Hela-iCLIP` is used as `--inspect-protein` because it is the only **assay-matched**
-column (iCLIP, like THRAP3).
+
+**The runs now use an eCLIP-only panel.** `THRAP3/RBPeekSamplesheet_eCLIP.tsv` keeps the 224
+`-eCLIP` columns of 299, dropping 68 PAR-CLIP and 7 iCLIP. Assay is then uniform, so a
+difference between two columns cannot be an assay difference. State the cost alongside any
+result: `HNRNPC-Hela-iCLIP` was the only **assay-matched** column (THRAP3 is itself iCLIP),
+and HNRNPC agreeing with *itself* across both cell line **and** assay was the strongest
+finding of the earlier runs. HNRNPC keeps `HepG2-HNRNPC-eCLIP` and `K562-HNRNPC-eCLIP`, so it
+is still an internal control — but a within-assay one, and the cross-assay argument no longer
+applies. `ELAVL1-PARCLIP` and `TRA2B-MDA231-iCLIP` are excluded too. Point `-s` back at the
+top-level `RBPeekSamplesheet.tsv` to restore all of them.
 
 ## Caveats when reading the results
 
@@ -118,17 +126,24 @@ column (iCLIP, like THRAP3).
   leave on if the panel is later switched to `../CLIP/*-merged-xls/*.xl.bed.gz` (268 files),
   which remains the better long-term input for nucleotide-resolution questions.
 
-- **Read positional structure off `protein_nt_metaprofile_heatmap.png`, not the
-  `-i/--inspect-protein` plot.** The inspect plot is one row per *locus*, hierarchically
-  clustered with average linkage on sparse data, which chains: a 2-way cut of a 4,000-row
-  reproduction split 3,999 vs 1, so its apparent row groups are not real sub-populations.
-  `--protein-nt-heatmap` is one row per *protein*, row-normalised so RBPs are compared by
-  profile shape rather than sequencing depth, and clustered by profile correlation so RBPs
-  group by binding geometry.
-- **The heatmap row filter is hardcoded** at `sum >= 50` (`intersect_inference_bed.py:704`),
-  not the 40 stated in the top-level README. It was tuned against the decoys BED; with 297
-  columns over 29,018 THRAP3 loci most rows will pass, so it may need raising to keep the
-  heatmap legible.
+- **Read positional structure off `metaprofile.png`.** It now draws its top 10 from the same
+  enrichment ranking that picks the heatmap's 20 columns, so the two figures agree on which
+  proteins matter, and the separate `protein_nt_metaprofile_heatmap.png` it used to need has
+  been removed. Do **not** read positional structure off the `-i/--inspect-protein` plot: it
+  is one row per *locus*, hierarchically clustered with average linkage on sparse data, which
+  chains — a 2-way cut of a 4,000-row reproduction split 3,999 vs 1, so its apparent row
+  groups are not real sub-populations. These runs no longer pass `-i`.
+- **The heatmap row filter is now a percentile**, `--heatmap-min-support-percentile 10`, not
+  an absolute cut. Row support is the summed score of every overlapping panel interval across
+  every column, so it has no intrinsic scale: median row support was 1,594 on the exonic
+  subset against 296 on the intronic one, and the flat 200 used previously therefore dropped
+  11.3% of exonic loci against 43.5% of intronic ones. The percentile also always drops
+  zero-support loci — 18.6% of the intronic set — so a run where the percentile resolves to 0
+  cannot produce blank heatmap rows.
+- **These runs pass `--no-clustering`**, so there is no `binf_heatmap_clusters.tsv` and no
+  `metaprofile_cluster_C*.png`. `protein_ranking.tsv` is the replacement: every panel sample
+  ranked by mean peak support with its `frac centred` score alongside, which is the table to
+  read when weighing depth against central enrichment.
 - **Clippy parameterisation differs across the panel.** THRAP3 and the PAR-CLIP set use
   `minHeightAdjust1.0_minPromAdjust1.0`; the eCLIP set uses `stdev1.0`. This affects the
   panel columns' peak-calling sensitivity relative to each other.

@@ -80,8 +80,11 @@ much more of the panel. 300 asks for 3.7%; the standard error on an enrichment f
 
 - **`Enrichment ranking: N of 302 proteins excluded`** — if N is large, `--protein-min-loci`
   is biting and should come down further.
-- **row filter kept %** — `--heatmap-min-support 200` sums support across all 302 columns,
-  so it does not scale with locus count. If it keeps ~everything, raise it.
+- **row filter kept %** — `--heatmap-min-support 200` sums support across all panel columns,
+  so it does not scale with locus count. If it keeps ~everything, raise it. The absolute form
+  is kept here deliberately: these runs are compared against each other at fixed panel width.
+  `--heatmap-min-support-percentile` is the size-matched alternative, and is what the THRAP3
+  runs use because their exonic and intronic locus sets differ 5x in median row support.
 - **`-i HNRNPC-Hela-iCLIP`** is carried over from the THRAP3 runs for continuity only; there
   is no bait-matched reason for it here. Swap it once the ranking shows what is actually
   enriched.

@@ -188,7 +188,25 @@ def parse_args():
             "(default 50, the previously hardcoded value). This scales with the number of "
             "panel columns, not with anything intrinsic to a locus, so a wide panel makes it "
             "permissive: 87%% of rows passed on a 297-column run, which saturates the heatmap. "
-            "Raise it when the heatmap looks uniformly dark."
+            "Raise it when the heatmap looks uniformly dark. Prefer "
+            "--heatmap-min-support-percentile whenever two runs are meant to be compared."
+        ),
+    )
+    p.add_argument(
+        "--heatmap-min-support-percentile",
+        type=float,
+        default=None,
+        help=(
+            "Size-matched alternative to --heatmap-min-support, which it overrides when given. "
+            "Drops the bottom P%% of loci by summed support instead of cutting at an absolute "
+            "value, so two runs over different locus sets are filtered equally hard. Row "
+            "support has no intrinsic scale - it is the summed SCORE of every overlapping "
+            "panel interval across every column - so an absolute threshold means different "
+            "things in different runs: at 200, the THRAP3 exonic run lost 11.3%% of loci and "
+            "the intronic run 43.5%%, because median support differs 5x between them. Loci "
+            "with zero support are ALWAYS dropped, whatever the percentile resolves to; "
+            "without that, a set where over P%% of loci are empty (18.6%% of the THRAP3 "
+            "intronic loci) yields a threshold of 0 and plots blank heatmap rows."
         ),
     )
     p.add_argument(
@@ -196,7 +214,8 @@ def parse_args():
         type=int,
         default=None,
         help=(
-            "Crop both nucleotide heatmaps to +/- this many nt for DISPLAY only (default: "
+            "Crop the -i/--inspect-protein nucleotide heatmap to +/- this many nt for DISPLAY "
+            "only (default: "
             "show the full --window). Purely a plotting crop: --window still governs what is "
             "counted, so every statistic, the metaprofile, the enrichment ranking and the "
             "summary table are unchanged. Use it to zoom in on the centre without narrowing "
@@ -204,14 +223,15 @@ def parse_args():
         ),
     )
     p.add_argument(
-        "--protein-nt-heatmap",
+        "--no-clustering",
         action="store_true",
         help=(
-            "Write a proteins x nucleotide heatmap of mean support profiles, row-normalised "
-            "so RBPs are compared by profile SHAPE rather than by sequencing depth. Rows are "
-            "clustered by profile correlation, so RBPs group by binding geometry relative to "
-            "the inference loci. Unlike -i/--inspect-protein this is one row per protein "
-            "rather than one row per locus, which stays legible at any number of loci."
+            "Skip k-means row clustering entirely. The loci x protein heatmap is still "
+            "written, with rows ordered by total support instead of grouped by cluster, and "
+            "so is the tSNE, as a single-colour scatter. Suppresses binf_heatmap_clusters.tsv "
+            "and is incompatible with --cluster-metaprofiles. Use it when the question is "
+            "'which panel columns are enriched here', not 'what kinds of locus are there' - "
+            "the clusters are only worth computing if something downstream consumes them."
         ),
     )
     p.add_argument(
@@ -242,8 +262,11 @@ def parse_args():
         type=int,
         default=METAPROFILE_TOP_PROTEINS,
         help=(
-            "Use top K proteins for global and per-cluster metaprofile plotting "
-            f"(default: {METAPROFILE_TOP_PROTEINS})."
+            "Plot the top K proteins in the global and per-cluster metaprofiles "
+            f"(default: {METAPROFILE_TOP_PROTEINS}). These are the first K of the SAME "
+            "ranking that picks the heatmap's columns (--protein-select), so the metaprofile "
+            "is always a subset of the heatmap and the two figures agree on which proteins "
+            "matter. Capped at --cluster-top-proteins."
         ),
     )
     p.add_argument(
@@ -830,6 +853,62 @@ def percentile_scale(matrix: np.ndarray, pct: float) -> np.ndarray:
     return np.clip(dense / hi, 0.0, 1.0)
 
 
+METAPROFILE_YLABEL = "Mean peak support across all loci (Gaussian smoothed)"
+
+
+def render_metaprofile(
+    offsets: np.ndarray,
+    profiles: dict,
+    order: list,
+    grand_totals: dict,
+    n_loci: int,
+    window: int,
+    out_path: Path,
+    title: str,
+) -> None:
+    """
+    Draw one metaprofile panel.
+
+    The left axis is mean support per locus, i.e. counts.mean(axis=0). Every locus is in the
+    denominator, including the ones where the protein has no signal at all, so a curve is
+    diluted by non-binding loci rather than describing the sites it does bind.
+
+    The right axis is that multiplied by n_loci, which recovers the summed panel score.
+    Because n_loci is a single constant the two axes are the same curve at two scales and
+    agree pixel for pixel - the only normalisation that can honestly share an axis. Anything
+    per-protein (dividing each curve by its own maximum, say) reorders the curves and needs
+    its own panel.
+    """
+    fig, ax = plt.subplots(figsize=(13.5, 4.8))
+    for protein_name in order:
+        total = float(grand_totals.get(protein_name, 0.0))
+        ax.plot(
+            offsets,
+            profiles[protein_name],
+            label=f"{protein_name}  (sum={total:,.0f})",
+            linewidth=2,
+        )
+    ax.axvline(0, color="black", linewidth=1, alpha=0.4)
+    ax.set_xlabel("Relative nucleotide position around inference loci (nt)")
+    ax.set_ylabel(METAPROFILE_YLABEL)
+    ax.set_xlim(-window, window)
+    # Left-aligned: sample names make these titles long, and a centred one overruns the
+    # figure once tight_layout has shrunk the axes to make room for the legend.
+    ax.set_title(title, loc="left", fontsize=10)
+
+    ax2 = ax.twinx()
+    lo, hi = ax.get_ylim()
+    ax2.set_ylim(lo * n_loci, hi * n_loci)
+    ax2.set_ylabel(f"Total peak support (sum over {n_loci:,} loci)")
+
+    # Legend sits clear of ax2's tick labels AND its y-label, both of which live between the
+    # axes edge and the legend.
+    ax.legend(frameon=False, loc="center left", bbox_to_anchor=(1.14, 0.5), borderaxespad=0.0)
+    fig.tight_layout(rect=[0.0, 0.0, 0.66, 1.0])
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
+
+
 def plot_cluster_metaprofiles(
     protein_sources: list[tuple[str, Path]],
     cluster_ids_sorted: list[int],
@@ -847,6 +926,7 @@ def plot_cluster_metaprofiles(
     cluster_masks = {cid: (all_cluster_labels == cid) for cid in cluster_ids_sorted}
     cluster_profiles: dict[int, dict[str, np.ndarray]] = {cid: {} for cid in cluster_ids_sorted}
     cluster_scores: dict[int, dict[str, float]] = {cid: {} for cid in cluster_ids_sorted}
+    cluster_totals: dict[int, dict[str, float]] = {cid: {} for cid in cluster_ids_sorted}
 
     for protein_name, merged_xl_bed in protein_sources:
         counts = compute_counts_for_protein(
@@ -865,25 +945,25 @@ def plot_cluster_metaprofiles(
             smoothed = smooth_metaprofile_gaussian(meta_counts, sigma=sigma)
             cluster_profiles[cid][protein_name] = smoothed
             cluster_scores[cid][protein_name] = float(np.sum(smoothed))
+            cluster_totals[cid][protein_name] = float(counts[mask, :].sum())
 
     for cid in cluster_ids_sorted:
         profiles = cluster_profiles[cid]
         if not profiles:
             continue
         top_proteins = sorted(cluster_scores[cid], key=cluster_scores[cid].get, reverse=True)[:metaprofile_top_k]
-        plt.figure(figsize=(11, 4.5))
-        for protein_name in top_proteins:
-            plt.plot(offsets, profiles[protein_name], label=protein_name, linewidth=2)
-        plt.axvline(0, color="black", linewidth=1, alpha=0.4)
-        plt.xlabel("Relative nucleotide position around inference loci (nt)")
-        plt.ylabel("Mean crosslink support per region (Gaussian smoothed)")
-        plt.title(f"Cluster C{cid} metaprofile")
-        plt.xlim(-window, window)
-        plt.legend(frameon=False, loc="center left", bbox_to_anchor=(1.02, 0.5), borderaxespad=0.0)
-        plt.tight_layout(rect=[0.0, 0.0, 0.82, 1.0])
+        n_loci = int(np.sum(cluster_masks[cid]))
         out_path = outdir / f"metaprofile_cluster_C{cid}.png"
-        plt.savefig(out_path, dpi=200)
-        plt.close()
+        render_metaprofile(
+            offsets=offsets,
+            profiles=profiles,
+            order=top_proteins,
+            grand_totals=cluster_totals[cid],
+            n_loci=n_loci,
+            window=window,
+            out_path=out_path,
+            title=f"Cluster C{cid} metaprofile (n = {n_loci:,} loci)",
+        )
         print(f"Wrote cluster metaprofile plot to: {out_path}")
 
 
@@ -988,6 +1068,13 @@ def main():
         raise ValueError("--metaprofile-top-proteins must be >= 1")
     if args.tsne and not args.table:
         raise ValueError("--tsne requires --table so binf_summary.tsv is available.")
+    if args.no_clustering and args.cluster_metaprofiles:
+        raise ValueError(
+            "--cluster-metaprofiles needs the row clusters that --no-clustering suppresses; "
+            "pass one or the other."
+        )
+    if args.heatmap_min_support_percentile is not None and not 0 < args.heatmap_min_support_percentile < 100:
+        raise ValueError("--heatmap-min-support-percentile must be between 0 and 100 (exclusive)")
 
     xldir = Path(args.xldir)
     if not xldir.exists():
@@ -1057,7 +1144,6 @@ def main():
         protein_names = [name for name, _ in protein_sources]
 
         n_binf = len(binf_keys)
-        L = 2 * args.window + 1
         offsets = np.arange(-args.window, args.window + 1, dtype=np.int64)
 
         # For table output: store metrics per protein.
@@ -1069,9 +1155,7 @@ def main():
         inspect_counts_matrix = None
 
         meta_profiles = {}
-        meta_profile_scores = {}
 
-        plt.figure(figsize=(11, 4.5))
         for protein_name, merged_xl_bed in protein_sources:
             counts = compute_counts_for_protein(
                 merged_xl_bed=merged_xl_bed,
@@ -1099,24 +1183,9 @@ def main():
             meta_counts = counts.mean(axis=0)
             smoothed = smooth_metaprofile_gaussian(meta_counts, sigma=args.gaussian_sigma)
             meta_profiles[protein_name] = smoothed
-            # Rank proteins by total metaprofile signal and plot top-K only.
-            meta_profile_scores[protein_name] = float(np.sum(smoothed))
 
-        top_proteins = sorted(meta_profile_scores, key=meta_profile_scores.get, reverse=True)[:metaprofile_top_k]
-        for protein_name in top_proteins:
-            plt.plot(offsets, meta_profiles[protein_name], label=protein_name, linewidth=2)
-
-        plt.axvline(0, color="black", linewidth=1, alpha=0.4)
-        plt.xlabel("Relative nucleotide position around inference loci (nt)")
-        plt.ylabel("Mean crosslink support per region (Gaussian smoothed)")
-        plt.xlim(-args.window, args.window)
-        plt.legend(frameon=False, loc="center left", bbox_to_anchor=(1.02, 0.5), borderaxespad=0.0)
-        plt.tight_layout(rect=[0.0, 0.0, 0.82, 1.0])
-
-        plot_path = outdir / "metaprofile.png"
-        plt.savefig(plot_path, dpi=200)
-        print(f"Wrote metaprofile plot to: {plot_path}")
-        plt.close()
+        # The metaprofile is plotted below, AFTER the protein ranking, because it now draws
+        # its top-K from that same ranking rather than from depth.
 
         # Resolve the eligibility gate. A fractional gate is the safe choice when two runs
         # will be compared, because an absolute one is harsher on the smaller locus set.
@@ -1191,7 +1260,11 @@ def main():
             f"(of {len(protein_names)}): {', '.join(cluster_protein_names[:5])}"
             + (" ..." if k_top > 5 else "")
         )
-        score_label = "frac centred" if args.protein_select == "enrichment" else "centrality r"
+        score_label = {
+            "enrichment": "frac centred",
+            "centrality": "centrality r",
+            "total": "mean peak support",
+        }[args.protein_select]
         if centrality_scores is not None:
             # Print the selected columns with both scores, so a high-r/low-signal column is
             # obvious rather than silently shaping the heatmap.
@@ -1203,21 +1276,114 @@ def main():
                     f"loci={int((totals > 0).sum()):>6}  total={float(totals.sum()):,.0f}"
                 )
 
+        # The metaprofile draws from the SAME ranking that picks the heatmap columns, so the
+        # two figures never disagree about which proteins matter. Previously it ranked by
+        # sum(smoothed profile), i.e. purely by depth, while the heatmap ranked by enrichment -
+        # which is why a separate proteins x nt heatmap had to exist to show the heatmap's
+        # proteins as profiles.
+        meta_top_k = min(metaprofile_top_k, len(cluster_protein_names))
+        grand_totals = {pn: float(np.sum(totals_by_protein[pn])) for pn in protein_names}
+        plot_path = outdir / "metaprofile.png"
+        render_metaprofile(
+            offsets=offsets,
+            profiles=meta_profiles,
+            order=cluster_protein_names[:meta_top_k],
+            grand_totals=grand_totals,
+            n_loci=n_binf,
+            window=args.window,
+            out_path=plot_path,
+            title=f"Top {meta_top_k} of {len(protein_names)} panel samples by {rank_desc}"
+                  f"   |   n = {n_binf:,} loci",
+        )
+        print(f"Wrote metaprofile plot to: {plot_path}")
+
+        # Ranked panel samples. This is the table that carries BOTH rankings side by side -
+        # mean support (depth around the locus) and frac_centred (how central that support is) -
+        # which are the two competing answers to "which RBP co-occupies these sites".
+        ranking_path = outdir / "protein_ranking.tsv"
+        by_mean = sorted(protein_names, key=lambda pn: grand_totals[pn], reverse=True)
+        enr_rank = {pn: i + 1 for i, pn in enumerate(protein_signal_rank)}
+        selected = set(cluster_protein_names)
+        with open(ranking_path, "w", encoding="utf-8") as fout:
+            fout.write(
+                "\t".join(
+                    [
+                        "rank",
+                        "sample",
+                        "mean_peak_support",
+                        "total_peak_support",
+                        "loci_with_signal",
+                        "frac_loci_with_signal",
+                        f"{args.protein_select}_score",
+                        f"{args.protein_select}_rank",
+                        "eligible",
+                        "selected_for_heatmap",
+                    ]
+                )
+                + "\n"
+            )
+            for i, pn in enumerate(by_mean, 1):
+                totals = np.asarray(totals_by_protein[pn])
+                n_sig = int((totals > 0).sum())
+                # Under --protein-select total the ranking score IS the summed support, so
+                # report that rather than an NA column that duplicates total_peak_support.
+                if centrality_scores is None:
+                    score = f"{grand_totals[pn]:.6g}"
+                elif pn in centrality_scores:
+                    score = f"{centrality_scores[pn]:.6g}"
+                else:
+                    score = "NA"
+                fout.write(
+                    "\t".join(
+                        [
+                            str(i),
+                            pn,
+                            f"{grand_totals[pn] / n_binf:.6g}",
+                            f"{grand_totals[pn]:.6g}",
+                            str(n_sig),
+                            f"{n_sig / n_binf:.6g}",
+                            score,
+                            str(enr_rank.get(pn, "NA")),
+                            "True" if pn in enr_rank else "False",
+                            "True" if pn in selected else "False",
+                        ]
+                    )
+                    + "\n"
+                )
+        print(f"Wrote ranked panel samples to: {ranking_path} (sorted by mean peak support)")
+
         heatmap_matrix = np.column_stack([totals_by_protein[pn] for pn in cluster_protein_names])
         # Filter out low-support rows for stable clustering (sum across all proteins in full table).
         full_row_sums = np.column_stack([totals_by_protein[pn] for pn in protein_names]).sum(axis=1)
         heatmap_row_sums = full_row_sums
-        heatmap_keep_mask = heatmap_row_sums >= args.heatmap_min_support
+        n_zero = int(np.sum(heatmap_row_sums <= 0))
+        if args.heatmap_min_support_percentile is not None:
+            # Percentile of every row, then drop empty rows regardless. The zero clause is
+            # load-bearing: where more than P% of loci have no support at all the percentile
+            # resolves to 0 and a bare threshold would keep those loci as blank heatmap rows.
+            support_threshold = float(np.percentile(heatmap_row_sums, args.heatmap_min_support_percentile))
+            heatmap_keep_mask = (heatmap_row_sums > 0) & (heatmap_row_sums >= support_threshold)
+            filter_desc = (
+                f"bottom {args.heatmap_min_support_percentile:g}% by summed support "
+                f"(threshold {support_threshold:.6g}) plus all empty rows"
+            )
+        else:
+            support_threshold = float(args.heatmap_min_support)
+            heatmap_keep_mask = heatmap_row_sums >= support_threshold
+            filter_desc = f"sum across all proteins >= {support_threshold:g}"
         heatmap_matrix_filtered = heatmap_matrix[heatmap_keep_mask, :]
         n_kept = int(np.sum(heatmap_keep_mask))
+        n_rows = len(heatmap_keep_mask)
         print(
-            f"Global heatmap row filter (sum across all proteins >= {args.heatmap_min_support:g}): "
-            f"kept {n_kept} / {len(heatmap_keep_mask)} ({100 * n_kept / len(heatmap_keep_mask):.1f}%)"
+            f"Global heatmap row filter ({filter_desc}): kept {n_kept} / {n_rows} "
+            f"({100 * n_kept / n_rows:.1f}%), dropped {n_rows - n_kept} "
+            f"({100 * (n_rows - n_kept) / n_rows:.1f}%), of which {n_zero} had zero support "
+            f"({100 * n_zero / n_rows:.1f}% of all loci)"
         )
         if heatmap_matrix_filtered.shape[0] == 0:
             raise ValueError(
-                f"No inference BED rows pass the global heatmap filter "
-                f"(sum across proteins >= {args.heatmap_min_support:g}). Lower --heatmap-min-support."
+                f"No inference BED rows pass the global heatmap filter ({filter_desc}). "
+                "Lower --heatmap-min-support or --heatmap-min-support-percentile."
             )
 
         # Logistic-scale for heatmap display; k-means clustering uses binarized presence/absence.
@@ -1232,26 +1398,38 @@ def main():
         else:
             heatmap_matrix_scaled = logistic_scale(heatmap_matrix_filtered)
         n_filt = heatmap_matrix_scaled.shape[0]
-        binary_rows = (heatmap_matrix_filtered > 0.0).astype(np.float64)
-
-        try:
-            from sklearn.cluster import KMeans
-        except ImportError as e:
-            raise ImportError("scikit-learn is required for k-means row clustering. Install scikit-learn.") from e
-
-        k_fit = min(args.n_clusters, n_filt)
-        if k_fit < 1:
-            raise ValueError("No rows available for k-means clustering.")
-        km = KMeans(n_clusters=k_fit, random_state=args.tsne_random_state, n_init="auto")
-        km_labels = km.fit_predict(binary_rows).astype(np.int64)
-        # sklearn uses 0..k-1; use 1..k for downstream labels
-        row_clusters = km_labels + 1
-
-        # Row order: by cluster id (asc), then by total crosslink support (desc) within cluster.
         row_totals_filtered = heatmap_row_sums[heatmap_keep_mask]
-        sort_idx = np.lexsort((-row_totals_filtered.astype(np.float64), row_clusters))
-        heatmap_display = heatmap_matrix_scaled[sort_idx]
-        row_clusters_sorted = row_clusters[sort_idx]
+
+        if args.no_clustering:
+            row_clusters = None
+            row_clusters_sorted = None
+            cluster_ids_sorted = []
+            cluster_to_color = None
+            row_colors = None
+            k_fit = 0
+            # No cluster key to sort within, so support alone orders the locus axis.
+            sort_idx = np.argsort(-row_totals_filtered.astype(np.float64), kind="stable")
+            heatmap_display = heatmap_matrix_scaled[sort_idx]
+        else:
+            binary_rows = (heatmap_matrix_filtered > 0.0).astype(np.float64)
+
+            try:
+                from sklearn.cluster import KMeans
+            except ImportError as e:
+                raise ImportError("scikit-learn is required for k-means row clustering. Install scikit-learn.") from e
+
+            k_fit = min(args.n_clusters, n_filt)
+            if k_fit < 1:
+                raise ValueError("No rows available for k-means clustering.")
+            km = KMeans(n_clusters=k_fit, random_state=args.tsne_random_state, n_init="auto")
+            km_labels = km.fit_predict(binary_rows).astype(np.int64)
+            # sklearn uses 0..k-1; use 1..k for downstream labels
+            row_clusters = km_labels + 1
+
+            # Row order: by cluster id (asc), then by total support (desc) within cluster.
+            sort_idx = np.lexsort((-row_totals_filtered.astype(np.float64), row_clusters))
+            heatmap_display = heatmap_matrix_scaled[sort_idx]
+            row_clusters_sorted = row_clusters[sort_idx]
 
         # Column linkage only: cosine distance between proteins across rows (order-independent).
         if heatmap_matrix_scaled.shape[1] > 1:
@@ -1260,14 +1438,15 @@ def main():
         else:
             col_linkage = None
 
-        cluster_ids_sorted = sorted(np.unique(row_clusters))
-        n_colors = max(len(cluster_ids_sorted), 1)
-        if n_colors <= len(CLUSTER_HUES):
-            cluster_palette = CLUSTER_HUES[:n_colors]
-        else:
-            cluster_palette = sns.color_palette("husl", n_colors=n_colors)
-        cluster_to_color = {cid: cluster_palette[i] for i, cid in enumerate(cluster_ids_sorted)}
-        row_colors = [cluster_to_color[int(cid)] for cid in row_clusters_sorted]
+        if not args.no_clustering:
+            cluster_ids_sorted = sorted(np.unique(row_clusters))
+            n_colors = max(len(cluster_ids_sorted), 1)
+            if n_colors <= len(CLUSTER_HUES):
+                cluster_palette = CLUSTER_HUES[:n_colors]
+            else:
+                cluster_palette = sns.color_palette("husl", n_colors=n_colors)
+            cluster_to_color = {cid: cluster_palette[i] for i, cid in enumerate(cluster_ids_sorted)}
+            row_colors = [cluster_to_color[int(cid)] for cid in row_clusters_sorted]
 
         if args.heatmap_scale == "percentile":
             cbar_label = f"log1p support\n({args.heatmap_scale_percentile:g}th pct clip)"
@@ -1311,18 +1490,20 @@ def main():
         _hm.yaxis.set_label_position("left")
         _hm.set_ylabel("Proteins")
         plt.setp(_hm.get_yticklabels(), rotation=0, fontsize=8)
-        legend_handles = [
-            Patch(facecolor=cluster_to_color[cid], edgecolor="none", label=f"C{cid}") for cid in cluster_ids_sorted
-        ]
-        heatmap_fig.ax_heatmap.legend(
-            handles=legend_handles,
-            title="Locus cluster",
-            loc="upper left",
-            bbox_to_anchor=(1.0 + (_p_rd.width / max(_p_hm.width, 1e-9)) + 0.05, 1.0),
-            frameon=False,
-            fontsize=8,
-            title_fontsize=9,
-        )
+        if not args.no_clustering:
+            legend_handles = [
+                Patch(facecolor=cluster_to_color[cid], edgecolor="none", label=f"C{cid}")
+                for cid in cluster_ids_sorted
+            ]
+            heatmap_fig.ax_heatmap.legend(
+                handles=legend_handles,
+                title="Locus cluster",
+                loc="upper left",
+                bbox_to_anchor=(1.0 + (_p_rd.width / max(_p_hm.width, 1e-9)) + 0.05, 1.0),
+                frameon=False,
+                fontsize=8,
+                title_fontsize=9,
+            )
         # Default clustermap puts the colourbar top-left, where it now sits on top of the
         # relocated row labels. Park it under the legend on the right instead.
         _p_leg_x = 1.0 + (_p_rd.width / max(_p_hm.width, 1e-9)) + 0.05
@@ -1338,49 +1519,60 @@ def main():
         heatmap_path = outdir / "binf_support_heatmap.png"
         heatmap_fig.savefig(heatmap_path, dpi=200, bbox_inches="tight")
         plt.close(heatmap_fig.fig)
-        print(f"Wrote clustered heatmap to: {heatmap_path}")
-        cluster_sizes = {int(cid): int(np.sum(row_clusters == cid)) for cid in np.unique(row_clusters)}
-        print(f"Row cluster sizes (binary k-means, k={k_fit}): {cluster_sizes}")
+        print(
+            f"Wrote heatmap to: {heatmap_path}"
+            + (" (loci ordered by total support; k-means skipped)" if args.no_clustering else " (clustered)")
+        )
+        # binf_heatmap_clusters.tsv is the ONLY carrier of cluster membership, and both
+        # plot_offset_distribution.py --clusters and plot_cluster_metaprofile_at_loci.py
+        # --clusters read it. It is therefore written whenever clusters exist, and skipped
+        # only when there are none to record.
+        all_cluster_labels = None
+        if args.no_clustering:
+            print("Row clustering skipped (--no-clustering); no binf_heatmap_clusters.tsv written")
+        else:
+            cluster_sizes = {int(cid): int(np.sum(row_clusters == cid)) for cid in np.unique(row_clusters)}
+            print(f"Row cluster sizes (binary k-means, k={k_fit}): {cluster_sizes}")
 
-        # Export per-locus cluster assignment aligned to original inference BED order.
-        all_cluster_labels = np.full(n_binf, -1, dtype=np.int64)
-        keep_indices = np.flatnonzero(heatmap_keep_mask)
-        all_cluster_labels[keep_indices] = row_clusters
-        cluster_tsv_path = outdir / "binf_heatmap_clusters.tsv"
-        with open(cluster_tsv_path, "w", encoding="utf-8") as fout:
-            fout.write(
-                "\t".join(
-                    [
-                        "binf_chr_start_end",
-                        "chrom",
-                        "start",
-                        "end",
-                        "row_sum_support",
-                        "passes_heatmap_filter",
-                        "heatmap_cluster",
-                    ]
-                )
-                + "\n"
-            )
-            for i, key in enumerate(binf_keys):
-                chrom, start_str, end_str = key.split("_", 2)
-                passes = bool(heatmap_keep_mask[i])
-                cluster_label = str(int(all_cluster_labels[i])) if passes else "NA"
+            # Export per-locus cluster assignment aligned to original inference BED order.
+            all_cluster_labels = np.full(n_binf, -1, dtype=np.int64)
+            keep_indices = np.flatnonzero(heatmap_keep_mask)
+            all_cluster_labels[keep_indices] = row_clusters
+            cluster_tsv_path = outdir / "binf_heatmap_clusters.tsv"
+            with open(cluster_tsv_path, "w", encoding="utf-8") as fout:
                 fout.write(
                     "\t".join(
                         [
-                            key,
-                            chrom,
-                            start_str,
-                            end_str,
-                            f"{heatmap_row_sums[i]:.6g}",
-                            "True" if passes else "False",
-                            cluster_label,
+                            "binf_chr_start_end",
+                            "chrom",
+                            "start",
+                            "end",
+                            "row_sum_support",
+                            "passes_heatmap_filter",
+                            "heatmap_cluster",
                         ]
                     )
                     + "\n"
                 )
-        print(f"Wrote heatmap cluster assignments to: {cluster_tsv_path}")
+                for i, key in enumerate(binf_keys):
+                    chrom, start_str, end_str = key.split("_", 2)
+                    passes = bool(heatmap_keep_mask[i])
+                    cluster_label = str(int(all_cluster_labels[i])) if passes else "NA"
+                    fout.write(
+                        "\t".join(
+                            [
+                                key,
+                                chrom,
+                                start_str,
+                                end_str,
+                                f"{heatmap_row_sums[i]:.6g}",
+                                "True" if passes else "False",
+                                cluster_label,
+                            ]
+                        )
+                        + "\n"
+                    )
+            print(f"Wrote heatmap cluster assignments to: {cluster_tsv_path}")
         if args.cluster_metaprofiles:
             plot_cluster_metaprofiles(
                 protein_sources=protein_sources,
@@ -1395,65 +1587,6 @@ def main():
                 outdir=outdir,
                 panel_anchor=args.panel_anchor,
             )
-
-        if args.protein_nt_heatmap:
-            # Rows are proteins, not loci, so this stays legible however many loci there
-            # are. meta_profiles already holds each protein's mean support vector, so this
-            # is a reshape rather than another pass over the BEDs.
-            # Same columns as the heatmap/clustering, so every view agrees on which
-            # proteins are in scope and --protein-select applies here too.
-            pnt_names = list(cluster_protein_names)
-            pnt_matrix = np.vstack([meta_profiles[pn] for pn in pnt_names])
-            # Display crop only; meta_profiles itself (and everything derived from it) keeps
-            # the full --window.
-            pnt_lo, pnt_hi = 0, pnt_matrix.shape[1]
-            pnt_axis_window = args.window
-            if args.nt_heatmap_window is not None:
-                pnt_axis_window = args.nt_heatmap_window
-                pnt_lo = args.window - args.nt_heatmap_window
-                pnt_hi = args.window + args.nt_heatmap_window + 1
-                pnt_matrix = pnt_matrix[:, pnt_lo:pnt_hi]
-            # Row-normalise to each protein's own maximum: without this the plot ranks
-            # proteins by sequencing depth, when the question is the shape of the profile.
-            row_max = pnt_matrix.max(axis=1, keepdims=True)
-            row_max[row_max <= 0] = 1.0
-            pnt_scaled = pnt_matrix / row_max
-            # Correlation distance clusters by profile shape; drop flat rows first, since a
-            # constant profile has undefined correlation and would poison the linkage.
-            varying = pnt_scaled.std(axis=1) > 0
-            n_dropped = int((~varying).sum())
-            if n_dropped:
-                print(f"protein x nt heatmap: dropped {n_dropped} protein(s) with a flat profile")
-            pnt_scaled = pnt_scaled[varying]
-            pnt_names = [n for n, keep in zip(pnt_names, varying) if keep]
-            if pnt_scaled.shape[0] > 1:
-                pnt_linkage = linkage(pdist(pnt_scaled, metric="correlation"), method="average")
-            else:
-                pnt_linkage = None
-            pnt_fig = sns.clustermap(
-                pnt_scaled,
-                row_linkage=pnt_linkage,
-                row_cluster=pnt_linkage is not None,
-                col_cluster=False,
-                cmap="magma",
-                xticklabels=max(1, (2 * pnt_axis_window + 1) // 20),
-                yticklabels=pnt_names,
-                figsize=(12, max(6, 0.18 * len(pnt_names))),
-                cbar_kws={"label": "mean support\n(row-normalised)"},
-            )
-            pnt_fig.ax_heatmap.set_xticklabels(
-                [t.get_text() for t in pnt_fig.ax_heatmap.get_xticklabels()], rotation=90, fontsize=7
-            )
-            # x tick positions are matrix columns; relabel them as offsets.
-            xt = pnt_fig.ax_heatmap.get_xticks()
-            pnt_fig.ax_heatmap.set_xticklabels([f"{int(x) - pnt_axis_window}" for x in xt], rotation=90, fontsize=7)
-            pnt_fig.ax_heatmap.set_xlabel("Nucleotide position relative to inference locus")
-            pnt_fig.ax_heatmap.set_ylabel("Protein")
-            pnt_fig.ax_heatmap.tick_params(axis="y", labelsize=6)
-            pnt_path = outdir / "protein_nt_metaprofile_heatmap.png"
-            pnt_fig.savefig(pnt_path, dpi=200)
-            plt.close(pnt_fig.fig)
-            print(f"Wrote protein x nucleotide heatmap to: {pnt_path} ({pnt_scaled.shape[0]} proteins)")
 
         if args.inspect_protein is not None:
             if inspect_counts_matrix is None:
@@ -1521,6 +1654,8 @@ def main():
             print(f"Wrote binf summary table to: {tsv_path}")
             if args.tsne:
                 tsne_path = outdir / "binf_summary_tsne.png"
+                # all_cluster_labels is None under --no-clustering; the plotting function
+                # already falls back to a single-colour scatter in that case.
                 make_tsne_from_binf_summary(
                     cluster_to_color=cluster_to_color,
                     tsv_path=tsv_path,

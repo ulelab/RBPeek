@@ -60,11 +60,21 @@ mkdir -p "$OUT"
 # so both stay comparable to the whole-locus run. See scripts/run_thrap3_intersect.sbatch
 # for why each one is set the way it is.
 #
-# --heatmap-min-support 200 is carried over, but WATCH IT. Row support sums the score column
-# across every panel entry, and the panel just gained four crosslink-level BEDs that are far
-# denser than the Clippy peak files (one is ~550MB against ~1MB typical). Row sums will rise,
-# so 200 will be more permissive than the 78.3% it kept on run 52008929. The log prints the
-# kept percentage - if it approaches 100%, raise this before reading the heatmap.
+# --heatmap-min-support-percentile 10 REPLACES the absolute --heatmap-min-support 200, for
+# exactly the reason --protein-min-loci-frac replaced --protein-min-loci below. Row support
+# has no intrinsic scale: it is the summed SCORE of every overlapping panel interval across
+# every column, so the same number means different things in two runs. Measured on runs
+# 52359304/52359306, median row support was 1,594 exonic against 296 intronic - a 5.4x gap -
+# so a flat 200 dropped 11.3% of exonic loci and 43.5% of intronic ones. The intronic heatmap
+# was effectively a top-56% subset of its loci while the exonic one was a top-89% subset, and
+# the two were being read side by side.
+#
+# The percentile filter also ALWAYS drops zero-support loci, whatever the percentile resolves
+# to. That clause is load-bearing here: 18.6% of intronic loci have no support from any panel
+# column, so the 10th percentile of the intronic set is literally 0 and a bare percentile
+# would have kept ~750 blank heatmap rows. Expected: exonic threshold 166, 10.0% dropped;
+# intronic threshold 0 with the zero clause firing, 18.6% dropped. The residual asymmetry is
+# now real emptiness rather than an artefact of scale.
 #
 # --protein-min-loci-frac 0.0248 REPLACES the flat --protein-min-loci 500. The gate is
 # load-bearing either way - the enrichment fraction is trivially 1.0 for a protein whose
@@ -84,30 +94,43 @@ mkdir -p "$OUT"
 # harmonisation fix, so K562-ELAVL1-rep1/rep2 and TRA2B-MDA231-rep1..rep3 contributed nothing
 # to either. Their logs have no "Chromosome naming:" line; the new ones should.
 #
-# --nt-heatmap-window 50 is new and is DISPLAY ONLY: --window stays at 100, so every
-# statistic, the metaprofile, the enrichment ranking and the summary table are identical to
-# what they would be uncropped. It only zooms both nucleotide heatmaps onto the centre.
+# -s THRAP3/RBPeekSamplesheet_eCLIP.tsv restricts the panel to the 224 eCLIP columns of 299,
+# dropping 68 PAR-CLIP and 7 iCLIP. Assay is then uniform, so a difference between two columns
+# cannot be an assay difference. The cost is real and should be stated when the results are:
+# HNRNPC-Hela-iCLIP was the only assay-matched column (THRAP3 is itself iCLIP), and HNRNPC
+# agreeing with ITSELF across both cell line and assay was the strongest result of the earlier
+# runs. HNRNPC keeps its HepG2 and K562 columns, but that replication is now within-assay.
+# TRA2B-MDA231-iCLIP is dropped too. Point -s back at RBPeekSamplesheet.tsv to restore both.
+#
+# --no-clustering. k-means on binarised presence answers "what kinds of locus are there",
+# which is a Centrosome question; here the question is which panel columns are enriched at
+# THRAP3 sites. Dropping it removes binf_heatmap_clusters.tsv and the six per-cluster
+# metaprofiles, orders the heatmap's locus axis by total support instead, and leaves the tSNE
+# a single colour. protein_ranking.tsv is the replacement output: every panel sample ranked by
+# mean peak support, carrying frac_centred alongside, so depth and central enrichment can be
+# compared directly rather than one being chosen in advance.
+#
+# No -i and no --protein-nt-heatmap. The metaprofile now takes its top 10 from the SAME
+# enrichment ranking that picks the heatmap's 20 columns, so it already shows the heatmap's
+# proteins as profiles - which was the only job protein_nt_metaprofile_heatmap had. --window
+# stays at 100 throughout; nothing about the statistics changes.
 python3 scripts/intersect_inference_bed.py \
   -x ../CLIP \
   -b "$BINF" \
-  -s RBPeekSamplesheet.tsv \
+  -s THRAP3/RBPeekSamplesheet_eCLIP.tsv \
   --skip-merge \
   --table \
   -o "$OUT" \
   --window 100 \
-  --nt-heatmap-window 50 \
   --panel-anchor midpoint \
-  --protein-nt-heatmap \
   --protein-select enrichment \
   --enrichment-window 5 \
   --centrality-min-total 100 \
   --protein-min-loci-frac 0.0248 \
-  --heatmap-min-support 200 \
+  --heatmap-min-support-percentile 10 \
   --heatmap-scale percentile \
   --heatmap-scale-percentile 99 \
-  --cluster-metaprofiles \
-  --n-clusters 6 \
+  --no-clustering \
   --cluster-top-proteins 20 \
   --metaprofile-top-proteins 10 \
-  --tsne \
-  -i HNRNPC-Hela-iCLIP
+  --tsne

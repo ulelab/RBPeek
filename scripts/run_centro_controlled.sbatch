@@ -69,6 +69,11 @@ mkdir -p "$OUT"
 # smaller set to retain most of the panel. The enrichment fraction is correspondingly
 # imprecise (SE ~ +/-0.04 at n=100), which is another reason to read the differential rather
 # than the rank.
+# --protein-nt-heatmap was removed from the tool: the metaprofile now takes its top proteins
+# from the same enrichment ranking that picks the heatmap's columns, so it already shows the
+# heatmap's proteins as profiles. Clustering is KEPT here - the Centrosome analysis reads
+# cluster membership downstream via plot_offset_distribution.py and
+# plot_cluster_metaprofile_at_loci.py, both of which need binf_heatmap_clusters.tsv.
 python3 scripts/intersect_inference_bed.py \
   -x ../CLIP \
   -b "$BINF" \
@@ -79,7 +84,6 @@ python3 scripts/intersect_inference_bed.py \
   --window 100 \
   --nt-heatmap-window 50 \
   --panel-anchor midpoint \
-  --protein-nt-heatmap \
   --protein-select enrichment \
   --enrichment-window 5 \
   --centrality-min-total 100 \
