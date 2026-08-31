@@ -879,13 +879,23 @@ def render_metaprofile(
     per-protein (dividing each curve by its own maximum, say) reorders the curves and needs
     its own panel.
     """
-    fig, ax = plt.subplots(figsize=(13.5, 4.8))
-    for protein_name in order:
+    # Height grows with the legend so 20 curves stay as legible as 10.
+    fig_h = max(4.8, 0.30 * len(order) + 2.2)
+    fig, ax = plt.subplots(figsize=(13.5, fig_h))
+    # The default prop cycle is 10 colours, so a 20-curve plot silently draws two proteins in
+    # the same blue. Vary LINESTYLE every time the colours wrap instead of reaching for a
+    # 20-hue palette: tab20 does not clear the normal-vision separation floor, and a second
+    # non-colour channel stays readable under any colour-vision deficiency.
+    palette = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    linestyles = ["-", "--", ":", "-."]
+    for i, protein_name in enumerate(order):
         total = float(grand_totals.get(protein_name, 0.0))
         ax.plot(
             offsets,
             profiles[protein_name],
             label=f"{protein_name}  (sum={total:,.0f})",
+            color=palette[i % len(palette)],
+            linestyle=linestyles[(i // len(palette)) % len(linestyles)],
             linewidth=2,
         )
     ax.axvline(0, color="black", linewidth=1, alpha=0.4)
@@ -901,10 +911,21 @@ def render_metaprofile(
     ax2.set_ylim(lo * n_loci, hi * n_loci)
     ax2.set_ylabel(f"Total peak support (sum over {n_loci:,} loci)")
 
-    # Legend sits clear of ax2's tick labels AND its y-label, both of which live between the
-    # axes edge and the legend.
-    ax.legend(frameon=False, loc="center left", bbox_to_anchor=(1.14, 0.5), borderaxespad=0.0)
-    fig.tight_layout(rect=[0.0, 0.0, 0.66, 1.0])
+    # Fixed FIGURE-fraction layout rather than tight_layout + an axes-relative legend. Three
+    # things compete for the strip to the right of the plot: ax2's tick labels, ax2's y-label,
+    # and the legend. Anchoring the legend in axes coordinates puts it a fixed multiple of the
+    # AXES width away, which is blind to how wide the tick labels turned out - six-digit
+    # totals pushed the y-label straight under the legend text. Figure coordinates make the
+    # gap absolute, so it holds whatever the numbers are.
+    fig.subplots_adjust(left=0.06, right=0.50, top=1.0 - 0.5 / fig_h, bottom=0.72 / fig_h)
+    fig.legend(
+        *ax.get_legend_handles_labels(),
+        frameon=False,
+        loc="center left",
+        bbox_to_anchor=(0.60, 0.5),
+        bbox_transform=fig.transFigure,
+        borderaxespad=0.0,
+    )
     fig.savefig(out_path, dpi=200)
     plt.close(fig)
 
@@ -1470,7 +1491,11 @@ def main():
             col_cluster=False,
             col_colors=row_colors,
             cmap="viridis",
-            yticklabels=cluster_protein_names,
+            # Rows are ordered by the protein dendrogram, which groups by co-occurrence and
+            # therefore puts the deepest columns together - not by selection rank. Printing
+            # the rank makes the two orderings comparable at a glance, and makes it obvious
+            # when a visually dominant row is one the ranking placed near the cut.
+            yticklabels=[f"{pn}  [{i}]" for i, pn in enumerate(cluster_protein_names, 1)],
             xticklabels=False,
             figsize=(11, max(5.0, 0.34 * n_prot + 2.0)),
             cbar_kws={"label": cbar_label},
@@ -1488,7 +1513,7 @@ def main():
         _rd.invert_xaxis()
         _hm.yaxis.tick_left()
         _hm.yaxis.set_label_position("left")
-        _hm.set_ylabel("Proteins")
+        _hm.set_ylabel(f"Proteins  [n] = rank by {rank_desc}")
         plt.setp(_hm.get_yticklabels(), rotation=0, fontsize=8)
         if not args.no_clustering:
             legend_handles = [

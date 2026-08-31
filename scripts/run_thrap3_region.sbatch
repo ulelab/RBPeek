@@ -114,6 +114,12 @@ mkdir -p "$OUT"
 # enrichment ranking that picks the heatmap's 20 columns, so it already shows the heatmap's
 # proteins as profiles - which was the only job protein_nt_metaprofile_heatmap had. --window
 # stays at 100 throughout; nothing about the statistics changes.
+# --metaprofile-top-proteins 20 matches --cluster-top-proteins 20, so the metaprofile and the
+# heatmap now show the IDENTICAL set rather than the metaprofile showing the top half of it.
+# At 10 they diverged in a way that read as a bug: enrichment rank and depth are only weakly
+# related here (Spearman +0.35 over the 224 eligible columns), so the metaprofile's ranks 1-10
+# are mostly shallow columns while the heatmap's brightest rows - BCLAF1, BUD13, SAFB - sit at
+# enrichment ranks 16, 17 and 12 and were drawn on the heatmap but absent from the curves.
 python3 scripts/intersect_inference_bed.py \
   -x ../CLIP \
   -b "$BINF" \
@@ -132,5 +138,5 @@ python3 scripts/intersect_inference_bed.py \
   --heatmap-scale-percentile 99 \
   --no-clustering \
   --cluster-top-proteins 20 \
-  --metaprofile-top-proteins 10 \
+  --metaprofile-top-proteins 20 \
   --tsne
