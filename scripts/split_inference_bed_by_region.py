@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Split an inference BED into exonic and intronic subsets so the same loci can be run
-through intersect_inference_bed.py twice and the two enrichment profiles compared.
+through intersect_inference_bed.py twice and the two profiles compared.
 
 Classification is strand-aware and exon-priority:
 
@@ -18,9 +18,19 @@ without double-counting.
 Strandedness is not optional here: an anchor sitting inside a gene on the opposite strand is
 intergenic with respect to that gene, and treating it otherwise would put antisense loci in
 the intronic set.
+
+Also writes the two region BEDs intersect_inference_bed.py normalises against (--norm-bed):
+
+  regions_exonic.bed    merged exons, strand-aware
+  regions_intronic.bed  gene bodies minus merged exons, strand-aware
+
+--drop-chrM removes mitochondrial anchors before classifying. Mitochondrial genes have no
+introns, so this only ever changes the exonic set; there it matters, because mt-rRNA is a
+large eCLIP background that swamps the panel signal at those loci.
 """
 
 import argparse
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -29,6 +39,7 @@ from pathlib import Path
 # was run against, so exon/intron calls here line up with how the peaks were defined.
 # GENCODE is chr-prefixed like the inference BED, so no chromosome renaming is needed.
 DEFAULT_GTF = "/camp/lab/ulej/home/shared/genomes/hg38/gencodev39_annotation/filtered.gencode.v39.main.annotation.gtf"
+CHRM = {"chrM", "chrMT", "MT", "M"}
 
 
 def parse_args():
@@ -39,11 +50,13 @@ def parse_args():
         "--gtf",
         type=Path,
         default=Path(DEFAULT_GTF),
-        help=f"Gene annotation GTF, must match the BED's assembly (default: {DEFAULT_GTF})",
+        help="Gene annotation GTF, must match the BED's assembly (default: %s)" % DEFAULT_GTF,
     )
     p.add_argument("-o", "--outdir", type=Path, default=Path("THRAP3"), help="Output directory")
     p.add_argument("--prefix", default=None, help="Output basename (default: the input BED's stem)")
     p.add_argument("--keep-intergenic", action="store_true", help="Also write the intergenic subset")
+    p.add_argument("--drop-chrM", dest="drop_chrm", action="store_true",
+                   help="Remove mitochondrial anchors before classifying")
     p.add_argument(
         "--gene-feature",
         default="gene",
@@ -102,8 +115,7 @@ def subset(anchors: Path, regions: Path, out: Path, invert: bool = False) -> int
 
 def require(tool):
     """Fail with a usable message rather than a bare FileNotFoundError from subprocess."""
-    from shutil import which
-    if which(tool) is None:
+    if shutil.which(tool) is None:
         sys.exit(
             f"{tool} not found on PATH. Activate the environment that provides it, e.g.:\n"
             "  conda activate rbpeek"
@@ -143,27 +155,50 @@ def main():
     print(f"      {n_ex:,} exon rows -> {sum(1 for _ in open(exons)):,} merged intervals")
     print(f"      {n_gn:,} {args.gene_feature} rows -> {sum(1 for _ in open(genes)):,} merged intervals")
 
+    # Normalisation regions for intersect_inference_bed.py --norm-bed.
+    reg_exonic = outdir / "regions_exonic.bed"
+    reg_intronic = outdir / "regions_intronic.bed"
+    shutil.copyfile(str(exons), str(reg_exonic))
+    with open(reg_intronic, "w") as fh:
+        run(["bedtools", "subtract", "-s", "-a", str(genes), "-b", str(exons)], stdout=fh)
+
+    anchors = args.bed
+    n_input = sum(1 for _ in open(args.bed))
+    n_chrm = 0
+    if args.drop_chrm:
+        anchors = work / "anchors_nochrM.bed"
+        with open(args.bed) as fin, open(anchors, "w") as fout:
+            for line in fin:
+                if line.split("\t", 1)[0] in CHRM:
+                    n_chrm += 1
+                    continue
+                fout.write(line)
+
     print("[2/3] classifying anchors (strand-aware, exon-priority)")
-    total = sum(1 for _ in open(args.bed))
+    total = n_input - n_chrm
     exonic = outdir / f"{prefix}_exonic.bed"
-    n_exonic = subset(args.bed, exons, exonic)
+    n_exonic = subset(anchors, exons, exonic)
 
     genic = work / "genic.bed"
-    subset(args.bed, genes, genic)
+    subset(anchors, genes, genic)
     intronic = outdir / f"{prefix}_intronic.bed"
     n_intronic = subset(genic, exons, intronic, invert=True)
 
     n_intergenic = total - n_exonic - n_intronic
     if args.keep_intergenic:
         intergenic = outdir / f"{prefix}_intergenic.bed"
-        subset(args.bed, genes, intergenic, invert=True)
+        subset(anchors, genes, intergenic, invert=True)
         print(f"      intergenic -> {intergenic}")
 
     print("[3/3] summary")
-    print(f"      total anchors      {total:>8,}")
+    print(f"      input anchors      {n_input:>8,}")
+    if args.drop_chrm:
+        print(f"      chrM dropped       {n_chrm:>8,}")
+    print(f"      classified         {total:>8,}")
     print(f"      exonic             {n_exonic:>8,}  ({100*n_exonic/total:5.1f}%)  -> {exonic}")
     print(f"      intronic           {n_intronic:>8,}  ({100*n_intronic/total:5.1f}%)  -> {intronic}")
     print(f"      intergenic         {n_intergenic:>8,}  ({100*n_intergenic/total:5.1f}%)")
+    print(f"      normalisation regions -> {reg_exonic}, {reg_intronic}")
     print("      exon-priority: all transcripts' exons are merged first, so an anchor that is")
     print("      exonic in ANY transcript is exonic here. The two sets are disjoint by")
     print("      construction - intronic is 'genic AND in no merged exon'.")
