@@ -813,6 +813,7 @@ def main():
         skew_by_protein = {}
         kurt_by_protein = {}
         maxoff_by_protein = {}
+        central_by_protein = {}
         meta_profiles = {}
 
         for protein_name, merged_xl_bed in protein_sources:
@@ -835,6 +836,13 @@ def main():
             skew_by_protein[protein_name] = pearson_median_skew
             kurt_by_protein[protein_name] = kurtosis_excess
             maxoff_by_protein[protein_name] = max_binding_offset
+            # Summed support within +/-enrichment-window of the locus across ALL loci - the area
+            # under the metaprofile's central peak, unsmoothed. This is the number the eye reads
+            # off the metaprofile, and it is NOT what frac_centred measures: frac_centred asks
+            # how often a sample's single strongest window is central, per locus it binds.
+            _lo = args.window - args.enrichment_window
+            _hi = args.window + args.enrichment_window + 1
+            central_by_protein[protein_name] = float(counts[:, _lo:_hi].sum())
             # Average support profile across all input binf regions.
             meta_counts = counts.mean(axis=0)
             smoothed = smooth_metaprofile_gaussian(meta_counts, sigma=args.gaussian_sigma)
@@ -912,41 +920,45 @@ def main():
         )
         by_total = sorted(protein_names, key=lambda pn: grand_totals[pn], reverse=True)
         total_rank = {pn: i + 1 for i, pn in enumerate(by_total)}
-        enr_rank = {
+        by_enr = sorted(protein_names, key=lambda pn: frac_centred[pn], reverse=True)
+        enr_rank = {pn: i + 1 for i, pn in enumerate(by_enr)}
+        central_rank = {
             pn: i + 1
-            for i, pn in enumerate(sorted(protein_names, key=lambda pn: frac_centred[pn], reverse=True))
+            for i, pn in enumerate(sorted(protein_names, key=lambda pn: central_by_protein[pn], reverse=True))
         }
         selected = set(cluster_protein_names)
+        cols = [
+            "sample",
+            "enrichment_rank",
+            "frac_centred",
+            "central_rank",
+            "central_support",
+            "total_rank",
+            "mean_peak_support",
+            "total_peak_support",
+            "loci_with_signal",
+            "frac_loci_with_signal",
+            "selected_for_figures",
+        ]
+        # Sorted by enrichment rank whatever --protein-select was, so an enrichment run and a
+        # total run over the same loci list their rows in the same order and can be diffed.
         with open(ranking_path, "w", encoding="utf-8") as fout:
-            fout.write(
-                "\t".join(
-                    [
-                        "sample",
-                        "mean_peak_support",
-                        "total_peak_support",
-                        "loci_with_signal",
-                        "frac_loci_with_signal",
-                        "frac_centred",
-                        "total_rank",
-                        "enrichment_rank",
-                        "selected_for_figures",
-                    ]
-                )
-                + "\n"
-            )
-            for pn in by_total:
+            fout.write("\t".join(cols) + "\n")
+            for pn in by_enr:
                 n_sig = int((np.asarray(totals_by_protein[pn]) > 0).sum())
                 fout.write(
                     "\t".join(
                         [
                             pn,
+                            str(enr_rank[pn]),
+                            f"{frac_centred[pn]:.6g}",
+                            str(central_rank[pn]),
+                            f"{central_by_protein[pn] / n_binf:.6g}",
+                            str(total_rank[pn]),
                             f"{grand_totals[pn] / n_binf:.6g}",
                             f"{grand_totals[pn]:.6g}",
                             str(n_sig),
                             f"{n_sig / n_binf:.6g}",
-                            f"{frac_centred[pn]:.6g}",
-                            str(total_rank[pn]),
-                            str(enr_rank[pn]),
                             "True" if pn in selected else "False",
                         ]
                     )
@@ -954,8 +966,8 @@ def main():
                 )
         print(
             f"Wrote ranked panel samples to: {ranking_path} "
-            f"({len(protein_names)} samples, sorted by total peak support; "
-            "carries both rankings)"
+            f"({len(protein_names)} samples, sorted by enrichment rank; "
+            "carries enrichment, central and total rankings)"
         )
 
         heatmap_matrix = np.column_stack([totals_by_protein[pn] for pn in cluster_protein_names])
