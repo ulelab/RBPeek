@@ -7,7 +7,8 @@ Workflow
      (strand-aware) and record the peak cDNA (score, column 5) at each offset.
   2. Normalise: proportional_binding = cDNA of the sample's DISTINCT peaks inside the
      windows / the sample's total peak cDNA inside --norm-bed, mitochondrial peaks excluded.
-  3. Rank samples by proportional_binding and keep the top --support-pct percent.
+  3. Rank samples by mean peak support and keep the top --support-pct percent;
+     proportional_binding is reported for every sample but does not drive selection.
   4. Plot the metaprofile (first 20 of those), write sample_summary.tsv, then plot the
      heatmap and optional tSNE over the kept samples.
 
@@ -94,7 +95,7 @@ def parse_args():
         type=float,
         default=30.0,
         help=(
-            "Keep the top P%% of panel samples by proportional binding for the heatmap, the "
+            "Keep the top P%% of panel samples by mean peak support for the heatmap, the "
             "tSNE and clustering (default 30). The metaprofile draws the first "
             f"{METAPROFILE_MAX} of them."
         ),
@@ -616,30 +617,30 @@ def main():
 
         no_region = [pn for pn in protein_names if stats[pn]["region_cdna"] <= 0]
         if no_region:
-            print(f"WARNING: {len(no_region)} sample(s) have no peak cDNA inside --norm-bed and are "
-                  f"ranked last: {', '.join(no_region[:5])}" + (" ..." if len(no_region) > 5 else ""))
+            print(f"WARNING: {len(no_region)} sample(s) have no peak cDNA inside --norm-bed, so their "
+                  f"proportional_binding is NA: {', '.join(no_region[:5])}" + (" ..." if len(no_region) > 5 else ""))
 
-        # ---- 2. rank by proportional binding, keep the top --support-pct ----
-        ranked = sorted(protein_names,
-                        key=lambda pn: stats[pn]["prop"] if stats[pn]["region_cdna"] > 0 else -1.0,
-                        reverse=True)
+        # ---- 2. rank by mean peak support, keep the top --support-pct ----
+        # Not proportional_binding: its denominator is tiny for sparse samples, which pushed
+        # them to the top (K562-SUPV3L1 at 81% on 8,594 region cDNA on the THRAP3 exonic run).
+        ranked = sorted(protein_names, key=lambda pn: stats[pn]["total"], reverse=True)
         rank = {pn: i + 1 for i, pn in enumerate(ranked)}
         k_sel = max(1, math.ceil(args.support_pct / 100.0 * len(ranked)))
         selected = ranked[:k_sel]
-        print(f"Selected the top {k_sel} of {len(ranked)} samples ({args.support_pct:g}%) by proportional binding:")
+        print(f"Selected the top {k_sel} of {len(ranked)} samples ({args.support_pct:g}%) by mean peak support:")
         for pn in selected:
             s = stats[pn]
-            print(f"  {rank[pn]:>3}. {pn:40} {s['prop']:>8.3%}  locus cDNA={s['locus_cdna']:>12,.0f}  "
-                  f"region cDNA={s['region_cdna']:>13,.0f}  loci={s['n_sig']:>6,}")
+            print(f"  {rank[pn]:>3}. {pn:40} mean peak support={s['total'] / n_binf:>10,.1f}  "
+                  f"proportional={s['prop']:>8.2%}  loci={s['n_sig']:>6,}")
 
         # ---- 3. metaprofile ----
         meta_set = selected[:METAPROFILE_MAX]
         meta_path = outdir / "metaprofile.png"
         render_metaprofile(
             offsets, profiles, meta_set,
-            {pn: f"{stats[pn]['prop']:.2%} of region cDNA" for pn in meta_set},
+            {pn: f"mean peak support {stats[pn]['total'] / n_binf:,.1f}" for pn in meta_set},
             n_binf, args.window, meta_path,
-            f"Top {len(meta_set)} of {len(ranked)} samples by proportional binding   |   n = {n_binf:,} loci",
+            f"Top {len(meta_set)} of {len(ranked)} samples by mean peak support   |   n = {n_binf:,} loci",
         )
         print(f"Wrote metaprofile plot to: {meta_path}")
 
@@ -726,7 +727,7 @@ def main():
         _rd.invert_xaxis()
         _hm.yaxis.tick_left()
         _hm.yaxis.set_label_position("left")
-        _hm.set_ylabel("Samples  [n] = rank by proportional binding")
+        _hm.set_ylabel("Samples  [n] = rank by mean peak support")
         plt.setp(_hm.get_yticklabels(), rotation=0, fontsize=8)
         _p_leg_x = 1.0 + (_p_rd.width / max(_p_hm.width, 1e-9)) + 0.05
         if do_cluster:
