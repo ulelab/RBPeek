@@ -9,7 +9,7 @@ Workflow
      windows / the sample's total peak cDNA inside --norm-bed, mitochondrial peaks excluded.
   3. Rank samples by weighted binding - mean over all loci of log1p(Gaussian-weighted
      support per M region cDNA) - and keep the top --support-pct percent.
-  4. Plot the metaprofile (first 20 of those), write sample_summary.tsv, then plot the
+  4. Plot the metaprofile (first 10 of those), write sample_summary.tsv, then plot the
      heatmap and optional tSNE over the kept samples.
 
 Every interval - panel peak or inference locus - is anchored at (start+end)//2, which is the
@@ -53,9 +53,9 @@ CLUSTER_HUES = [
 DEFAULT_GENOME = "/camp/home/jonesm6/home/shared/genomes/hg38/hg38.genome"
 # One fixed seed for k-means and tSNE, so a run reproduces.
 RANDOM_STATE = 42
-# The metaprofile draws at most this many curves - beyond ~20 lines it is unreadable - while
-# the heatmap and tSNE take every selected sample.
-METAPROFILE_MAX = 20
+# The metaprofile draws at most this many curves, few enough that each stays distinguishable,
+# while the heatmap and tSNE take every selected sample.
+METAPROFILE_MAX = 10
 # Mitochondrial contig names in either convention. chrM peaks never enter a sample's
 # normalisation denominator: mt-rRNA is a large eCLIP background (one sample took 96% of its
 # locus signal from chrM), and counting it would rank samples by how clean their library is
