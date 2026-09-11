@@ -1,31 +1,10 @@
 #!/usr/bin/env python3
 """
-Build a THRAP3 inference BED (`binf`) for intersect_inference_bed.py from the four
-Clippy peak calls produced by the Flow CLIP-Seq run (project HA_THRAP3_CLIP,
-788995297969977723, execution 188723932105002059, CLIP-Seq v1.7, GRCh38).
-
-Three things have to happen before these peaks can be used as an inference BED:
-
-1. Chromosome naming. Flow ran Clippy against Homo_sapiens.GRCh38.fasta.fai, so the
-   peaks are Ensembl-style ("1"). The RBPeek panel under --xldir and the existing
-   decoys BED are UCSC-style ("chr1"). intersect_inference_bed.py only normalises
-   names on its internal merge path, never for the inference BED, so an unnormalised
-   THRAP3 BED would silently intersect nothing.
-
-2. Replicate reproducibility. The four libraries differ ~5x in depth (9,455 to 49,477
-   peaks), so a plain union is dominated by whichever library was sequenced deepest.
-   Overlapping peaks are merged strand-aware and kept only when at least
-   --min-reps distinct replicates contribute.
-
-3. Single-nucleotide anchors. intersect_inference_bed.py computes
-   offset = xl_start - binf_site_start (see intersect_inference_bed.py:356), so every
-   inference locus must be 1 bp wide or the metaprofile smears by the locus width.
-   Each merged region is collapsed to its midpoint.
+Build a THRAP3 inference BED (`binf`) for intersect_inference_bed.py Peak files
 
 Output BED6:
     chrom  start  end(=start+1)  name  score  strand
-where name is THRAP3_<n>reps_<i> and score is the number of contributing replicates,
-so downstream tables can be split by reproducibility tier.
+
 """
 
 import argparse

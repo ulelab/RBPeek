@@ -35,19 +35,17 @@ from matplotlib.patches import Patch
 from scipy.cluster.hierarchy import linkage
 from scipy.spatial.distance import pdist
 
-# Categorical hues for cluster identity, shared by the heatmap colour bar and the tSNE so a
-# cluster is the same colour in both. Not tab20: it is built as light/dark pairs, so adjacent
-# clusters differed mainly in lightness (OKLab dE x100 of 13.5 on normal vision against a
-# floor of 15). This order scores 20.8 on normal vision and 9.1 under simulated deuteranopia.
 CLUSTER_HUES = [
-    "#2a78d6",  # blue
-    "#eb6834",  # orange
-    "#1baf7a",  # green
-    "#eda100",  # amber
-    "#8a63d2",  # violet
-    "#00a3b5",  # teal
-    "#c2477f",  # magenta
-    "#6b7280",  # slate
+    "#393b79", # dark blue
+    "#637939", # dark green
+    "#e7ba52", # gold
+    "#d6616b", # dark pink
+    "#a55194", # purple
+    "#6b6ecf", # medium blue
+    "#b5cf6b", # medium green
+    "#8c6d31", # brown
+    "#e7969c", # light pink
+    "#de9ed6", # light purple
 ]
 
 DEFAULT_GENOME = "/camp/home/jonesm6/home/shared/genomes/hg38/hg38.genome"
@@ -735,7 +733,7 @@ def main():
             row_linkage=col_linkage,
             col_cluster=False,
             col_colors=row_colors,
-            cmap="viridis",
+            cmap="cubehelix",
             # Rows follow the sample dendrogram, not rank, so print the rank on each label.
             yticklabels=[f"{pn}  [{rank[pn]}]" for pn in selected],
             xticklabels=False,

@@ -7,7 +7,7 @@ Every run writes:
 
 | file | what it is |
 |---|---|
-| `metaprofile.png` | normalised mean support vs offset, for the first 20 selected samples |
+| `metaprofile.png` | normalised mean support vs offset, for the first 10 selected samples |
 | `sample_summary.tsv` | one row per panel sample: weighted binding (the ranking score), rank, proportional binding, raw support and shape statistics |
 | `binf_support_heatmap.png` | loci x selected samples, normalised support |
 | `binf_summary_tsne.png` | with `--tsne` |
@@ -108,16 +108,8 @@ For each sample:
 - **`locus_cdna`** — summed score of its **distinct** peaks within `±window` of any locus
 - **`proportional_binding`** = `locus_cdna / region_cdna`
 
-This takes sequencing depth out of the comparison: a sample with ten times the reads at the
-same positions gets the same value.
-
-Peaks are counted once because neighbouring loci's windows overlap. On the THRAP3 exonic set,
-76% of loci have a same-strand neighbour within 200 nt, so a per-window sum adds the same peak
-several times; `total_peak_support` still reports that sum for comparison.
-
-chrM is excluded because mitochondrial rRNA is a large eCLIP background. Before this change,
-241 chrM loci (1.2% of the exonic set) supplied 56% of HepG2-BCLAF1's summed support. Resplit
-with `--drop-chrM` as well; the script warns if the inference BED still has chrM loci.
+Peaks are counted once because neighbouring loci's windows overlap,
+yet `total_peak_support` still reports that sum for comparison.
 
 ### 3) Selection
 
@@ -126,20 +118,14 @@ weighted by a Gaussian around nt 0 (`--weight-sigma`, default 20 nt, so binding 
 0.88 and at 80 nt 0.0003), divided by the sample's `region_cdna` and multiplied by 10⁶, then
 `log1p`-transformed. The score is the mean of that over **all** loci. The top `--support-pct`%
 (68 of 224 at the default 30) go to the heatmap, tSNE and clustering, and the metaprofile draws
-the first 20 of them.
+the first 10 of them.
 
-Each part fixes a failure seen on the THRAP3 runs:
-
-- **Gaussian weight** — binding at the locus counts more than binding 50–100 nt away.
-- **÷ region cDNA** — sequencing depth cancels.
-- **log1p** — no handful of loci can decide the rank. Ranked by raw mean support, K562-SSB
-  came first, but 97% of its support came from 22 loci; after the log those loci carry 5% of
-  its score.
+- **Gaussian weight** — binding at the locus counts more than binding 50–100 nt away (Ex. a locus counts 0.88 at 10 nt, 0.14 at 40 nt and 0.0003 at 80 nt.)
+- **÷ region cDNA** — sequencing depth nromalisation
+- **log1p** — no handful of loci can decide the rank, this is ranked by raw mean support.
 - **mean over all loci** — loci a sample doesn't bind score 0, which keeps sparse samples down.
-  The plain ratio `proportional_binding` had no such brake: K562-SUPV3L1 scored 81% on 8,594
-  region cDNA from 536 loci.
 
-The cost is that breadth weighs heavily: a sample binding a few THRAP3 sites very strongly ranks
+A drawback is a sample binding a few inference loci very strongly ranks
 below one binding many sites moderately. `proportional_binding` and `mean_peak_support` are
 still reported for every sample.
 Figures show per-locus support ÷ `region_cdna` × 10⁶, labelled "per M region cDNA".
@@ -163,7 +149,7 @@ is itself 0. The `log1p` matters: support is heavy-tailed, and scaling raw value
   those where the sample has no signal.
 - **right axis**: the same curve times the locus count. One constant, so both axes describe the
   same pixels.
-- curves are the first 20 selected samples; legend entries give each one's weighted
+- curves are the first 10 selected samples; legend entries give each one's weighted
   binding. Curves past the tenth switch linestyle, since the colour cycle is 10 long.
 
 ### `binf_support_heatmap.png`

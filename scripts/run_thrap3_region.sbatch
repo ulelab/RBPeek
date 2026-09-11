@@ -10,19 +10,11 @@
 #   sbatch --job-name=thrap3_exonic   scripts/run_thrap3_region.sbatch exonic
 #   sbatch --job-name=thrap3_intronic scripts/run_thrap3_region.sbatch intronic
 #
-# Build the locus subsets and the normalisation regions once before submitting (the login
-# node is fine; the GTF path is the script's default):
+# Build the locus subsets and the normalisation regions once before submitting 
+#
 #   python3 scripts/split_inference_bed_by_region.py \
 #     -b THRAP3/THRAP3_merged_min2rep_anchors.bed -o THRAP3 --drop-chrM
-# That writes THRAP3_merged_min2rep_anchors_{exonic,intronic}.bed and
-# regions_{exonic,intronic}.bed.
-#
-# Samples are ranked by weighted binding: per locus, support weighted by a Gaussian around nt 0
-# (sigma 20 nt), divided by the sample's region cDNA, log1p'd, then averaged over all loci. The
-# top 30% go to the heatmap and tSNE, and the first 20 of those to the metaprofile.
-#
-# -s THRAP3/RBPeekSamplesheet_eCLIP.tsv is the 224 eCLIP columns of 299, so assay is uniform.
-# The cost: HNRNPC-Hela-iCLIP, the only assay-matched column, is not in it.
+
 
 set -euo pipefail
 
@@ -62,5 +54,5 @@ python3 scripts/intersect_inference_bed.py \
   --norm-bed "$NORM" \
   -o "$OUT" \
   --window 100 \
-  --support-pct 30 \
+  --support-pct 20 \
   --tsne
