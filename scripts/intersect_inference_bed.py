@@ -7,8 +7,8 @@ Workflow
      (strand-aware) and record the peak cDNA (score, column 5) at each offset.
   2. Normalise: proportional_binding = cDNA of the sample's DISTINCT peaks inside the
      windows / the sample's total peak cDNA inside --norm-bed, mitochondrial peaks excluded.
-  3. Rank samples by mean peak support and keep the top --support-pct percent;
-     proportional_binding is reported for every sample but does not drive selection.
+  3. Rank samples by weighted binding - mean over all loci of log1p(Gaussian-weighted
+     support per M region cDNA) - and keep the top --support-pct percent.
   4. Plot the metaprofile (first 20 of those), write sample_summary.tsv, then plot the
      heatmap and optional tSNE over the kept samples.
 
@@ -95,9 +95,18 @@ def parse_args():
         type=float,
         default=30.0,
         help=(
-            "Keep the top P%% of panel samples by mean peak support for the heatmap, the "
+            "Keep the top P%% of panel samples by weighted binding for the heatmap, the "
             "tSNE and clustering (default 30). The metaprofile draws the first "
             f"{METAPROFILE_MAX} of them."
+        ),
+    )
+    p.add_argument(
+        "--weight-sigma",
+        type=float,
+        default=20.0,
+        help=(
+            "Width (nt) of the Gaussian weight around nt 0 used by the ranking score (default "
+            "20): binding at 10 nt counts 0.88, at 40 nt 0.14, at 80 nt 0.0003."
         ),
     )
     p.add_argument("--heatmap-scale-percentile", type=float, default=99.0,
@@ -552,6 +561,8 @@ def main():
         raise ValueError("--support-pct must be in (0, 100]")
     if args.window < 2:
         raise ValueError("--window must be >= 2 (the binding-offset window is 5 nt)")
+    if args.weight_sigma <= 0:
+        raise ValueError("--weight-sigma must be > 0")
 
     xldir = Path(args.xldir)
     binf_path = Path(args.bed)
@@ -587,6 +598,9 @@ def main():
         protein_names = [name for name, _ in protein_sources]
         n_binf = len(binf_keys)
         offsets = np.arange(-args.window, args.window + 1, dtype=np.int64)
+        # Gaussian weight over offsets for the ranking score, peak 1 at nt 0, so a weighted
+        # locus value reads as "cDNA within the bell curve" rather than a tiny average.
+        weight = np.exp(-(offsets.astype(np.float64) ** 2) / (2.0 * args.weight_sigma ** 2))
 
         # ---- 1. per-sample counts, statistics and normalisation ----
         totals_by: dict[str, np.ndarray] = {}
@@ -605,6 +619,8 @@ def main():
                 "region_cdna": reg,
                 "scale": scale,
                 "prop": locus_cdna / reg if reg > 0 else float("nan"),
+                "weighted": float(np.log1p((counts.astype(np.float64) @ weight) * scale).mean())
+                if reg > 0 else float("nan"),
                 "total": float(totals.sum()),
                 "n_sig": int(has.sum()),
                 "mean_offset": _mean_or_nan(maxoff[has].astype(np.float64)),
@@ -618,35 +634,45 @@ def main():
         no_region = [pn for pn in protein_names if stats[pn]["region_cdna"] <= 0]
         if no_region:
             print(f"WARNING: {len(no_region)} sample(s) have no peak cDNA inside --norm-bed, so their "
-                  f"proportional_binding is NA: {', '.join(no_region[:5])}" + (" ..." if len(no_region) > 5 else ""))
+                  f"binding scores are NA and they rank last: {', '.join(no_region[:5])}" + (" ..." if len(no_region) > 5 else ""))
 
-        # ---- 2. rank by mean peak support, keep the top --support-pct ----
-        # Not proportional_binding: its denominator is tiny for sparse samples, which pushed
-        # them to the top (K562-SUPV3L1 at 81% on 8,594 region cDNA on the THRAP3 exonic run).
-        ranked = sorted(protein_names, key=lambda pn: stats[pn]["total"], reverse=True)
+        # ---- 2. rank by weighted binding, keep the top --support-pct ----
+        # weighted_binding = mean over ALL loci of log1p(Gaussian-weighted support per M region
+        # cDNA). Each part answers a failure seen on the THRAP3 runs:
+        #   - the Gaussian favours binding at the locus over binding 50-100 nt away;
+        #   - dividing by region cDNA takes sequencing depth out;
+        #   - log1p stops a few loci deciding the rank: raw mean support was led by K562-SSB,
+        #     97% of whose support came from 22 loci;
+        #   - averaging over ALL loci keeps sparse samples down (loci they miss score 0), which
+        #     the plain ratio did not: K562-SUPV3L1 scored 81% on 8,594 region cDNA.
+        ranked = sorted(protein_names,
+                        key=lambda pn: stats[pn]["weighted"] if stats[pn]["region_cdna"] > 0 else -1.0,
+                        reverse=True)
         rank = {pn: i + 1 for i, pn in enumerate(ranked)}
         k_sel = max(1, math.ceil(args.support_pct / 100.0 * len(ranked)))
         selected = ranked[:k_sel]
-        print(f"Selected the top {k_sel} of {len(ranked)} samples ({args.support_pct:g}%) by mean peak support:")
+        print(f"Selected the top {k_sel} of {len(ranked)} samples ({args.support_pct:g}%) by weighted binding "
+              f"(sigma {args.weight_sigma:g} nt):")
         for pn in selected:
             s = stats[pn]
-            print(f"  {rank[pn]:>3}. {pn:40} mean peak support={s['total'] / n_binf:>10,.1f}  "
-                  f"proportional={s['prop']:>8.2%}  loci={s['n_sig']:>6,}")
+            print(f"  {rank[pn]:>3}. {pn:40} weighted={s['weighted']:>8.4f}  "
+                  f"mean peak support={s['total'] / n_binf:>10,.1f}  loci={s['n_sig']:>6,}")
 
         # ---- 3. metaprofile ----
         meta_set = selected[:METAPROFILE_MAX]
         meta_path = outdir / "metaprofile.png"
         render_metaprofile(
             offsets, profiles, meta_set,
-            {pn: f"mean peak support {stats[pn]['total'] / n_binf:,.1f}" for pn in meta_set},
+            {pn: f"weighted binding {stats[pn]['weighted']:.3f}" for pn in meta_set},
             n_binf, args.window, meta_path,
-            f"Top {len(meta_set)} of {len(ranked)} samples by mean peak support   |   n = {n_binf:,} loci",
+            f"Top {len(meta_set)} of {len(ranked)} samples by weighted binding (sigma {args.weight_sigma:g} nt)"
+            f"   |   n = {n_binf:,} loci",
         )
         print(f"Wrote metaprofile plot to: {meta_path}")
 
         # ---- 4. the one combined table ----
         table_path = outdir / "sample_summary.tsv"
-        cols = ["sample", "rank", "selected", "proportional_binding", "locus_cdna", "region_cdna",
+        cols = ["sample", "rank", "selected", "weighted_binding", "proportional_binding", "locus_cdna", "region_cdna",
                 "mean_peak_support", "total_peak_support", "loci_with_signal", "frac_loci_with_signal",
                 "mean_binding_offset", "mean_variance", "mean_pearson_skew", "mean_kurtosis"]
         chosen = set(selected)
@@ -655,7 +681,7 @@ def main():
             for pn in ranked:
                 s = stats[pn]
                 fout.write("\t".join([
-                    pn, str(rank[pn]), "True" if pn in chosen else "False",
+                    pn, str(rank[pn]), "True" if pn in chosen else "False", _fmt(s["weighted"]),
                     _fmt(s["prop"]), _fmt(s["locus_cdna"]), _fmt(s["region_cdna"]),
                     _fmt(s["total"] / n_binf), _fmt(s["total"]), str(s["n_sig"]), _fmt(s["n_sig"] / n_binf),
                     _fmt(s["mean_offset"]), _fmt(s["mean_variance"]), _fmt(s["mean_skew"]), _fmt(s["mean_kurt"]),
@@ -727,7 +753,7 @@ def main():
         _rd.invert_xaxis()
         _hm.yaxis.tick_left()
         _hm.yaxis.set_label_position("left")
-        _hm.set_ylabel("Samples  [n] = rank by mean peak support")
+        _hm.set_ylabel("Samples  [n] = rank by weighted binding")
         plt.setp(_hm.get_yticklabels(), rotation=0, fontsize=8)
         _p_leg_x = 1.0 + (_p_rd.width / max(_p_hm.width, 1e-9)) + 0.05
         if do_cluster:

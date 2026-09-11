@@ -17,9 +17,9 @@
 # That writes THRAP3_merged_min2rep_anchors_{exonic,intronic}.bed and
 # regions_{exonic,intronic}.bed.
 #
-# Samples are ranked by mean peak support (raw per-window cDNA per locus). The top 30% go to
-# the heatmap and tSNE, and the first 20 of those to the metaprofile. sample_summary.tsv also
-# reports proportional binding (locus cDNA / region cDNA, chrM excluded) for every sample.
+# Samples are ranked by weighted binding: per locus, support weighted by a Gaussian around nt 0
+# (sigma 20 nt), divided by the sample's region cDNA, log1p'd, then averaged over all loci. The
+# top 30% go to the heatmap and tSNE, and the first 20 of those to the metaprofile.
 #
 # -s THRAP3/RBPeekSamplesheet_eCLIP.tsv is the 224 eCLIP columns of 299, so assay is uniform.
 # The cost: HNRNPC-Hela-iCLIP, the only assay-matched column, is not in it.
