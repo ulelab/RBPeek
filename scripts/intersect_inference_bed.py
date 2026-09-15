@@ -28,6 +28,9 @@ from pathlib import Path
 import matplotlib
 
 matplotlib.use("Agg")
+# Embed TrueType fonts in PDFs so text stays editable (e.g. in Illustrator) rather than being
+# converted to Type 3 outlines.
+matplotlib.rcParams["pdf.fonttype"] = 42
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
@@ -502,7 +505,7 @@ def plot_cluster_metaprofiles(protein_sources, order, scale, cluster_ids, labels
         if not profiles[cid]:
             continue
         n = int(masks[cid].sum())
-        out = outdir / f"metaprofile_cluster_C{cid}.png"
+        out = outdir / f"metaprofile_cluster_C{cid}.pdf"
         render_metaprofile(offsets, profiles[cid], [pn for pn in order if pn in profiles[cid]],
                            shares[cid], n, window, out, f"Cluster C{cid} metaprofile   |   n = {n:,} loci")
         print(f"Wrote cluster metaprofile plot to: {out}")
@@ -658,7 +661,7 @@ def main():
 
         # ---- 3. metaprofile ----
         meta_set = selected[:METAPROFILE_MAX]
-        meta_path = outdir / "metaprofile.png"
+        meta_path = outdir / "metaprofile.pdf"
         render_metaprofile(
             offsets, profiles, meta_set,
             {pn: f"weighted binding {stats[pn]['weighted']:.3f}" for pn in meta_set},
@@ -733,6 +736,9 @@ def main():
             row_linkage=col_linkage,
             col_cluster=False,
             col_colors=row_colors,
+            # Loci are not clustered, so the column-dendrogram axis only carries the title; the
+            # default 20% of the figure height left a large gap above the heatmap.
+            dendrogram_ratio=(0.2, 0.04),
             cmap="cubehelix",
             # Rows follow the sample dendrogram, not rank, so print the rank on each label.
             yticklabels=[f"{pn}  [{rank[pn]}]" for pn in selected],
@@ -741,7 +747,14 @@ def main():
             cbar_kws={"label": cbar_label},
             vmin=0.0,
             vmax=1.0,
+            # Rasterise the cell mesh only: as vector graphics every locus x sample cell is its
+            # own PDF rectangle, which is huge and slow to open. Text, dendrogram and colourbar
+            # stay vector.
+            rasterized=True,
         )
+        if heatmap_fig.ax_col_colors is not None:
+            for coll in heatmap_fig.ax_col_colors.collections:
+                coll.set_rasterized(True)
         heatmap_fig.ax_heatmap.set_xlabel("Inference BED loci")
         # Move the dendrogram to the right of the heatmap so the labels can sit on the left.
         _hm = heatmap_fig.ax_heatmap
@@ -767,7 +780,14 @@ def main():
         ])
         heatmap_fig.ax_cbar.tick_params(labelsize=7)
         heatmap_fig.ax_cbar.set_ylabel(cbar_label, fontsize=8)
-        heatmap_path = outdir / "binf_support_heatmap.png"
+        # The column-dendrogram axis is empty (loci are not clustered) and sits above any cluster
+        # colour bar, so a title there never collides with the data.
+        heatmap_fig.ax_col_dendrogram.set_title(
+            f"{binf_path.stem}: top {k_sel} of {len(ranked)} samples by weighted binding "
+            f"(sigma {args.weight_sigma:g} nt)   |   {int(keep.sum()):,} loci with support",
+            loc="left", fontsize=10,
+        )
+        heatmap_path = outdir / "binf_support_heatmap.pdf"
         heatmap_fig.savefig(heatmap_path, dpi=200, bbox_inches="tight")
         plt.close(heatmap_fig.fig)
         print(f"Wrote heatmap to: {heatmap_path}" + (" (clustered)" if do_cluster else " (loci ordered by support)"))

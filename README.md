@@ -7,9 +7,9 @@ Every run writes:
 
 | file | what it is |
 |---|---|
-| `metaprofile.png` | normalised mean support vs offset, for the first 10 selected samples |
+| `metaprofile.pdf` | normalised mean support vs offset, for the first 10 selected samples |
 | `sample_summary.tsv` | one row per panel sample: weighted binding (the ranking score), rank, proportional binding, raw support and shape statistics |
-| `binf_support_heatmap.png` | loci x selected samples, normalised support |
+| `binf_support_heatmap.pdf` | loci x selected samples, normalised support |
 | `binf_summary_tsne.png` | with `--tsne` |
 
 Passing `-n/--n-clusters` adds k-means groups over the loci, `binf_heatmap_clusters.tsv`, and
@@ -143,7 +143,7 @@ is itself 0. The `log1p` matters: support is heavy-tailed, and scaling raw value
 
 ## Outputs
 
-### `metaprofile.png`
+### `metaprofile.pdf`
 
 - **left axis**: mean normalised support per locus. Every locus is in the denominator, including
   those where the sample has no signal.
@@ -152,8 +152,10 @@ is itself 0. The `log1p` matters: support is heavy-tailed, and scaling raw value
 - curves are the first 10 selected samples; legend entries give each one's weighted
   binding. Curves past the tenth switch linestyle, since the colour cycle is 10 long.
 
-### `binf_support_heatmap.png`
+### `binf_support_heatmap.pdf`
 
+- title: the inference BED name, how many samples were selected out of how many, and the
+  number of loci with support
 - rows: the selected samples, labelled `NAME [rank]`
 - columns: loci with support from at least one selected sample
 - values: normalised support, colour-scaled as above
@@ -182,7 +184,7 @@ One row per panel sample, sorted by rank.
 One point per heatmap locus, on the same scaled matrix the heatmap draws. With `-n`, coloured
 by cluster in the same hues as the heatmap's cluster bar.
 
-### `binf_heatmap_clusters.tsv` and `metaprofile_cluster_C*.png` (with `-n`)
+### `binf_heatmap_clusters.tsv` and `metaprofile_cluster_C*.pdf` (with `-n`)
 
 k-means on the **binarised** matrix (`support > 0`), so clusters describe *which* samples are
 present, not how much. The TSV carries `binf_chr_start_end`, `chrom`, `start`, `end`,
@@ -209,5 +211,7 @@ where `python3` is the system interpreter.
 
 ## Notes
 
+- Figures are PDFs with embedded TrueType fonts, so text stays editable. The heatmap's cell mesh
+  is rasterised at 200 dpi inside the PDF; everything else is vector.
 - Runtime is dominated by `bedtools intersect`, twice per panel column (locus windows and normalisation regions).
 - k-means and tSNE use a fixed seed (`RANDOM_STATE = 42`), so runs reproduce.
