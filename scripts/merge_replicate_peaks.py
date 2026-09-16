@@ -23,7 +23,7 @@ What this does and does not do
 Grouping is on EXACT chrom/start/end/strand, so only byte-identical intervals combine. That
 is the right operation for 1 nt crosslink sites. For peaks it collapses very little: on the
 four THRAP3 replicates, exact matching found 2+ replicate support at 4.5% of intervals where
-overlap-based merging found 36%. Use build_inference_bed_from_peaks.py if you want
+overlap-based merging found 36%. build_thrap3_inference_bed.py does
 overlap-based reproducibility instead; this script is for pooling replicate signal.
 
 Chromosome naming is left exactly as found. intersect_inference_bed.py harmonises panel

@@ -1,13 +1,10 @@
-xl/
+# Analysis outputs are copied from the HPC by hand, not versioned.
+results/
+# Working files the build and split scripts regenerate.
 THRAP3/work/
-__pycache__/
-# ~47MB for the 15k-row decoys run, ~90MB for the 29k-row THRAP3 run: over
-# GitHub's 50MB warning and near its 100MB hard limit. Keep it on the HPC.
-binf_summary.tsv
-*:Zone.Identifier
+THRAP3/region_work/
+# Local Centrosome working directories (not versioned).
 Centrosome/work/
 Centrosome/gene_counts/
-# Analysis outputs are transferred from the HPC by hand and not versioned. 109 files,
-# 77.6MB, were untracked in one commit; the blobs stay in history, so this stops the repo
-# growing further rather than shrinking what is already there.
-results/
+__pycache__/
+*:Zone.Identifier

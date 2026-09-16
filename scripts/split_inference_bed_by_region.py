@@ -7,7 +7,7 @@ Classification is strand-aware and exon-priority:
 
   exonic     the anchor falls inside an annotated exon on its own strand
   intronic   the anchor falls inside a gene on its own strand but in no exon
-  intergenic neither (written out only with --keep-intergenic, never analysed by default)
+  intergenic neither; counted in the summary, not written
 
 Exon-priority matters because an anchor can be exonic in one transcript and intronic in
 another. Merging every transcript's exons before classifying resolves that consistently: an
@@ -54,7 +54,6 @@ def parse_args():
     )
     p.add_argument("-o", "--outdir", type=Path, default=Path("THRAP3"), help="Output directory")
     p.add_argument("--prefix", default=None, help="Output basename (default: the input BED's stem)")
-    p.add_argument("--keep-intergenic", action="store_true", help="Also write the intergenic subset")
     p.add_argument("--drop-chrM", dest="drop_chrm", action="store_true",
                    help="Remove mitochondrial anchors before classifying")
     p.add_argument(
@@ -185,10 +184,6 @@ def main():
     n_intronic = subset(genic, exons, intronic, invert=True)
 
     n_intergenic = total - n_exonic - n_intronic
-    if args.keep_intergenic:
-        intergenic = outdir / f"{prefix}_intergenic.bed"
-        subset(anchors, genes, intergenic, invert=True)
-        print(f"      intergenic -> {intergenic}")
 
     print("[3/3] summary")
     print(f"      input anchors      {n_input:>8,}")
