@@ -4,16 +4,18 @@ Rank a panel of CLIP samples by how much of their binding sits at an inference B
 
 Workflow
   1. For each panel sample, intersect its peaks with a +/-window around every locus
-     (strand-aware) and record the peak cDNA (score, column 5) at each offset.
+     (strand-aware) and spread each peak's cDNA (score, column 5) evenly across the
+     nucleotides it covers.
   2. Normalise: proportional_binding = cDNA of the sample's DISTINCT peaks inside the
-     windows / the sample's total peak cDNA inside --norm-bed, mitochondrial peaks excluded.
+     windows / the sample's peak cDNA inside --norm-bed, mitochondrial peaks excluded; each
+     peak counts by the fraction of its width inside.
   3. Rank samples by central binding - mean over all loci of log1p(support within
      +/---central-window nt, per M region cDNA) - and keep the top --support-pct percent.
   4. Plot the metaprofile (first 10 of those), write sample_summary.tsv, then plot the
      heatmap and optional tSNE over the kept samples.
 
-Every interval - panel peak or inference locus - is anchored at (start+end)//2, which is the
-start itself for a 1 nt interval.
+Inference loci are anchored at (start+end)//2. Panel intervals are spread across their width,
+which for a 1 nt crosslink site puts the whole score at the site itself.
 """
 
 import argparse
@@ -80,7 +82,7 @@ def parse_args():
         required=True,
         help=(
             "Regions each sample's normalising cDNA is summed over (strand-aware, chrM "
-            "excluded). Match it to the loci: regions_exonic.bed for an exonic locus set, "
+            "excluded; each peak counts by the fraction of its width inside). Match it to the loci: regions_exonic.bed for an exonic locus set, "
             "regions_intronic.bed for an intronic one - both written by "
             "split_inference_bed_by_region.py."
         ),
@@ -314,21 +316,26 @@ def load_binf_and_prepare_windows(binf_path: Path, window: int, genome: str, tmp
 
 def compute_counts_for_protein(panel_bed: Path, windows_bed: Path, binf_index, window: int, n_binf: int):
     """
-    counts[locus, offset] = summed peak score (cDNA) of panel peaks anchored at that offset.
+    counts[locus, offset] = panel peak cDNA (score, column 5) at that offset, with each peak's
+    score spread evenly across its width: a peak of width w adds score/w at every nucleotide it
+    covers inside the +/-window. A peak partly overlapping a window contributes only the
+    overlapping part, so an 11 nt peak centred at +12 adds 4/11 of its score to offsets
+    +7..+10; under a midpoint rule the central +/-10 window would have received nothing. A 1 nt
+    interval (a crosslink site) keeps its whole score at one offset.
 
-    Offsets are strand-aligned, so positive is always 5'->3' of the locus, and every panel
-    interval is anchored at (start+end)//2.
+    Offsets are strand-aligned, so positive is always 5'->3' of the locus.
 
-    Also returns locus_cdna: the summed score of the DISTINCT peaks landing in any window. A
-    peak inside two overlapping windows is added to both rows of counts but only once here,
-    which is the right numerator for a proportion - 76% of the THRAP3 exonic loci have a
-    same-strand neighbour within 200 nt, and summing per window inflated totals ~1.76x.
+    Also returns locus_cdna: the cDNA of the DISTINCT peaks inside the union of all locus
+    windows, each weighted by the fraction of its width inside that union. A peak inside two
+    overlapping windows is added to both rows of counts but only once here, which is the right
+    numerator for a proportion - 76% of the THRAP3 exonic loci have a same-strand neighbour
+    within 200 nt, and summing per window inflated totals ~1.76x.
 
     Window columns are read from the END of each intersect row, so panel files with more than
     six columns are handled.
     """
     counts = np.zeros((n_binf, 2 * window + 1), dtype=np.float32)
-    seen: dict[tuple[str, str, str, str], float] = {}
+    covered: dict[tuple[str, int, int, str], list] = {}
     cmd = ["bedtools", "intersect", "-a", str(panel_bed), "-b", str(windows_bed), "-s", "-wa", "-wb"]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
     assert proc.stdout is not None
@@ -340,35 +347,100 @@ def compute_counts_for_protein(panel_bed: Path, windows_bed: Path, binf_index, w
         idx_list = binf_index.get((w_chrom, anchor, w_strand))
         if not idx_list:
             continue
-        mid = (int(f[1]) + int(f[2])) // 2
-        offset = anchor - mid if w_strand == "-" else mid - anchor
-        if -window <= offset <= window:
-            score = float(f[4])
-            counts[idx_list, offset + window] += score
-            seen[(f[0], f[1], f[2], f[5])] = score
+        start, end = int(f[1]), int(f[2])
+        if end <= start:
+            end = start + 1
+        width = end - start
+        lo, hi = max(start, anchor - window), min(end - 1, anchor + window)
+        if lo > hi:
+            continue
+        a, b = (anchor - hi, anchor - lo) if w_strand == "-" else (lo - anchor, hi - anchor)
+        score = float(f[4])
+        counts[idx_list, a + window:b + window + 1] += score / width
+        entry = covered.get((f[0], start, end, f[5]))
+        if entry is None:
+            covered[(f[0], start, end, f[5])] = [score, width, [(lo, hi)]]
+        else:
+            entry[2].append((lo, hi))
     _, stderr = proc.communicate()
     if proc.returncode not in (0, None):
         raise RuntimeError(f"bedtools intersect failed (code={proc.returncode}): {stderr[:500]}")
-    return counts, float(sum(seen.values()))
+
+    locus_cdna = 0.0
+    for score, width, spans in covered.values():
+        spans.sort()
+        inside = 0
+        cur_lo, cur_hi = spans[0]
+        for lo, hi in spans[1:]:
+            if lo > cur_hi + 1:
+                inside += cur_hi - cur_lo + 1
+                cur_lo, cur_hi = lo, hi
+            else:
+                cur_hi = max(cur_hi, hi)
+        inside += cur_hi - cur_lo + 1
+        locus_cdna += score * inside / width
+    return counts, locus_cdna
+
+
+def merge_regions(bed: Path, tmpdir: Path) -> Path:
+    """Strand-aware merge of a region BED into BED6, so an overlap is never counted twice."""
+    rows = []
+    with _open_text_auto(bed) as fin:
+        for line in fin:
+            if not _is_data(line):
+                continue
+            c = line.rstrip("\n").split("\t")
+            if len(c) < 6:
+                raise ValueError(f"--norm-bed must be BED6 with strand in column 6: {line[:120]}")
+            rows.append((c[0], int(c[1]), int(c[2]), c[5]))
+    rows.sort(key=lambda r: (r[0], r[1]))
+    srt = tmpdir / "norm_sorted.bed"
+    with open(srt, "w", encoding="utf-8") as fout:
+        fout.writelines(f"{c}\t{a}\t{b}\t.\t.\t{st}\n" for c, a, b, st in rows)
+    r = subprocess.run(["bedtools", "merge", "-s", "-c", "6", "-o", "distinct", "-i", str(srt)],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"bedtools merge (normalisation regions) failed: {r.stderr[:500]}")
+    merged = tmpdir / "norm_merged.bed"
+    with open(merged, "w", encoding="utf-8") as fout:
+        for ln in r.stdout.splitlines():
+            if ln:
+                c = ln.split("\t")
+                fout.write(f"{c[0]}\t{c[1]}\t{c[2]}\t.\t.\t{c[3]}\n")
+    return merged
 
 
 def region_cdna(panel_bed: Path, norm_bed: Path, tmpdir: Path) -> float:
-    """Summed score of the sample's peaks whose midpoint lies in norm_bed, strand-aware, chrM skipped."""
-    mids = tmpdir / "norm_mids.bed"
-    with _open_text_auto(panel_bed) as fin, open(mids, "w", encoding="utf-8") as fout:
+    """
+    cDNA of the sample's peaks inside norm_bed (strand-aware, chrM skipped), each peak weighted
+    by the fraction of its width inside the regions. norm_bed must already be strand-merged
+    (merge_regions), or a peak overlapping two regions would be counted twice.
+    """
+    peaks = tmpdir / "norm_peaks.bed"
+    info: list[tuple[float, int]] = []
+    with _open_text_auto(panel_bed) as fin, open(peaks, "w", encoding="utf-8") as fout:
         for line in fin:
             if not _is_data(line):
                 continue
             c = line.rstrip("\n").split("\t")
             if c[0] in CHRM:
                 continue
-            m = (int(c[1]) + int(c[2])) // 2
-            fout.write(f"{c[0]}\t{m}\t{m + 1}\t.\t{c[4]}\t{c[5]}\n")
-    r = subprocess.run(["bedtools", "intersect", "-u", "-s", "-a", str(mids), "-b", str(norm_bed)],
+            start, end = int(c[1]), int(c[2])
+            if end <= start:
+                end = start + 1
+            fout.write(f"{c[0]}\t{start}\t{end}\t{len(info)}\t{c[4]}\t{c[5]}\n")
+            info.append((float(c[4]), end - start))
+    r = subprocess.run(["bedtools", "intersect", "-s", "-wo", "-a", str(peaks), "-b", str(norm_bed)],
                        capture_output=True, text=True)
     if r.returncode != 0:
         raise RuntimeError(f"bedtools intersect (normalisation) failed: {r.stderr[:500]}")
-    return float(sum(float(ln.split("\t")[4]) for ln in r.stdout.splitlines() if ln))
+    overlap: dict[int, int] = {}
+    for ln in r.stdout.splitlines():
+        if ln:
+            f = ln.split("\t")
+            i = int(f[3])
+            overlap[i] = overlap.get(i, 0) + int(f[-1])
+    return float(sum(info[i][0] * min(n, info[i][1]) / info[i][1] for i, n in overlap.items()))
 
 
 def compute_summary_stats(counts: np.ndarray, window: int):
@@ -586,6 +658,7 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix="intersect_binf_") as tmp:
         tmpdir = Path(tmp)
+        norm_merged = merge_regions(norm_bed, tmpdir)
         binf_keys, binf_index, windows_bed, n_chrm = load_binf_and_prepare_windows(
             binf_path, args.window, args.genome, tmpdir
         )
@@ -609,7 +682,7 @@ def main():
         for pn, path in protein_sources:
             counts, locus_cdna = compute_counts_for_protein(path, windows_bed, binf_index, args.window, n_binf)
             totals, variance, skew, kurt, maxoff = compute_summary_stats(counts, args.window)
-            reg = region_cdna(path, norm_bed, tmpdir)
+            reg = region_cdna(path, norm_merged, tmpdir)
             scale = PER_MILLION / reg if reg > 0 else 0.0
             has = totals > 0
             totals_by[pn] = totals
@@ -650,8 +723,15 @@ def main():
                         reverse=True)
         rank = {pn: i + 1 for i, pn in enumerate(ranked)}
         k_sel = max(1, math.ceil(args.support_pct / 100.0 * len(ranked)))
-        selected = ranked[:k_sel]
-        print(f"Selected the top {k_sel} of {len(ranked)} samples ({args.support_pct:g}%) by central binding "
+        # Only samples with region cDNA and some support can be selected: either one missing gives
+        # an all-zero heatmap column, and cosine distance to a zero vector is undefined. Such
+        # samples already rank last, so this never changes an ordinary selection.
+        selected = [pn for pn in ranked if stats[pn]["region_cdna"] > 0 and stats[pn]["total"] > 0][:k_sel]
+        if not selected:
+            raise ValueError("No sample has region cDNA and support at these loci; nothing to plot.")
+        if len(selected) < k_sel:
+            print(f"Note: only {len(selected)} of the {k_sel} requested samples have region cDNA and support at these loci")
+        print(f"Selected the top {len(selected)} of {len(ranked)} samples ({args.support_pct:g}%) by central binding "
               f"(±{args.central_window} nt):")
         for pn in selected:
             s = stats[pn]
@@ -782,7 +862,7 @@ def main():
         # The column-dendrogram axis is empty (loci are not clustered) and sits above any cluster
         # colour bar, so a title there never collides with the data.
         heatmap_fig.ax_col_dendrogram.set_title(
-            f"{binf_path.stem}: top {k_sel} of {len(ranked)} samples by central binding "
+            f"{binf_path.stem}: top {len(selected)} of {len(ranked)} samples by central binding "
             f"(±{args.central_window} nt)   |   {int(keep.sum()):,} loci with support",
             loc="left", fontsize=10,
         )
