@@ -68,8 +68,9 @@ panel.
    - `locus_cdna`: its cDNA inside any locus window, each distinct peak counted once.
    - `proportional_binding` = `locus_cdna / region_cdna`.
 3. **Ranking.** `central_binding` = mean over **all** loci of
-   `log1p(support within ±central-window × 10⁶ / region_cdna)`.
+   `log1p(strongest peak's cDNA inside ±central-window × 10⁶ / region_cdna)`.
    - The central window means only binding at the locus counts.
+   - If several peaks touch the window, only the one with the most cDNA inside it counts.
    - Dividing by `region_cdna` removes sequencing depth.
    - `log1p` stops a few very strong loci from deciding the rank.
    - Averaging over all loci scores unbound loci as 0. That keeps sparse samples down, but a

@@ -9,8 +9,9 @@ Workflow
   2. Normalise: proportional_binding = cDNA of the sample's DISTINCT peaks inside the
      windows / the sample's peak cDNA inside --norm-bed, mitochondrial peaks excluded; each
      peak counts by the fraction of its width inside.
-  3. Rank samples by central binding - mean over all loci of log1p(support within
-     +/---central-window nt, per M region cDNA) - and keep the top --support-pct percent.
+  3. Rank samples by central binding - mean over all loci of log1p(the strongest single
+     peak's cDNA inside +/---central-window nt, per M region cDNA) - and keep the top
+     --support-pct percent.
   4. Plot the metaprofile (first 10 of those), write sample_summary.tsv, then plot the
      heatmap and optional tSNE over the kept samples.
 
@@ -109,7 +110,8 @@ def parse_args():
         default=10,
         help=(
             "Half-width (nt) of the window around nt 0 counted by the ranking score (default 10, "
-            "i.e. offsets -10..+10). Binding outside it does not count toward the rank."
+            "i.e. offsets -10..+10). Per locus, only the peak with the most cDNA inside it counts; "
+            "binding outside it does not affect the rank."
         ),
     )
     p.add_argument("--heatmap-scale-percentile", type=float, default=99.0,
@@ -314,7 +316,8 @@ def load_binf_and_prepare_windows(binf_path: Path, window: int, genome: str, tmp
     return binf_keys, binf_index, windows, n_chrm
 
 
-def compute_counts_for_protein(panel_bed: Path, windows_bed: Path, binf_index, window: int, n_binf: int):
+def compute_counts_for_protein(panel_bed: Path, windows_bed: Path, binf_index, window: int, n_binf: int,
+                               central_window: int = 10):
     """
     counts[locus, offset] = panel peak cDNA (score, column 5) at that offset, with each peak's
     score spread evenly across its width: a peak of width w adds score/w at every nucleotide it
@@ -331,10 +334,16 @@ def compute_counts_for_protein(panel_bed: Path, windows_bed: Path, binf_index, w
     numerator for a proportion - 76% of the THRAP3 exonic loci have a same-strand neighbour
     within 200 nt, and summing per window inflated totals ~1.76x.
 
+    Also returns central_max: per locus, the largest single-peak contribution inside
+    +/-central_window (score x overlap / width). When several peaks touch the central window only
+    the strongest counts toward the ranking, and a large peak clipping the edge cannot beat a
+    smaller one sitting on the locus. counts itself still holds every peak.
+
     Window columns are read from the END of each intersect row, so panel files with more than
     six columns are handled.
     """
     counts = np.zeros((n_binf, 2 * window + 1), dtype=np.float32)
+    central_max = np.zeros(n_binf, dtype=np.float64)
     covered: dict[tuple[str, int, int, str], list] = {}
     cmd = ["bedtools", "intersect", "-a", str(panel_bed), "-b", str(windows_bed), "-s", "-wa", "-wb"]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
@@ -357,6 +366,9 @@ def compute_counts_for_protein(panel_bed: Path, windows_bed: Path, binf_index, w
         a, b = (anchor - hi, anchor - lo) if w_strand == "-" else (lo - anchor, hi - anchor)
         score = float(f[4])
         counts[idx_list, a + window:b + window + 1] += score / width
+        clo, chi = max(start, anchor - central_window), min(end - 1, anchor + central_window)
+        if clo <= chi:
+            central_max[idx_list] = np.maximum(central_max[idx_list], score * (chi - clo + 1) / width)
         entry = covered.get((f[0], start, end, f[5]))
         if entry is None:
             covered[(f[0], start, end, f[5])] = [score, width, [(lo, hi)]]
@@ -379,7 +391,7 @@ def compute_counts_for_protein(panel_bed: Path, windows_bed: Path, binf_index, w
                 cur_hi = max(cur_hi, hi)
         inside += cur_hi - cur_lo + 1
         locus_cdna += score * inside / width
-    return counts, locus_cdna
+    return counts, locus_cdna, central_max
 
 
 def merge_regions(bed: Path, tmpdir: Path) -> Path:
@@ -520,7 +532,7 @@ def render_metaprofile(offsets, profiles, order, legend, n_loci, window, out_pat
     denominator. Right axis: the same curve times n_loci - one constant, so both axes
     describe the same pixels.
     """
-    fig_h = max(4.8, 0.30 * len(order) + 2.2)
+    fig_h = max(9.6, 0.30 * len(order) + 2.2)
     fig, ax = plt.subplots(figsize=(13.5, fig_h))
     # 10 colours, then change linestyle when they wrap: a second non-colour channel stays
     # readable under colour-vision deficiency, which a 20-hue palette does not.
@@ -566,7 +578,7 @@ def plot_cluster_metaprofiles(protein_sources, order, scale, cluster_ids, labels
     for pn, path in protein_sources:
         if pn not in wanted:
             continue
-        counts, _ = compute_counts_for_protein(path, windows_bed, binf_index, window, n_binf)
+        counts, _, _ = compute_counts_for_protein(path, windows_bed, binf_index, window, n_binf)
         for cid in cluster_ids:
             m = masks[cid]
             if not m.any():
@@ -672,15 +684,14 @@ def main():
         protein_names = [name for name, _ in protein_sources]
         n_binf = len(binf_keys)
         offsets = np.arange(-args.window, args.window + 1, dtype=np.int64)
-        # Offsets counted by the ranking score: 1 within +/-central-window nt of the locus, else 0.
-        central = (np.abs(offsets) <= args.central_window).astype(np.float64)
 
         # ---- 1. per-sample counts, statistics and normalisation ----
         totals_by: dict[str, np.ndarray] = {}
         profiles: dict[str, np.ndarray] = {}
         stats: dict[str, dict] = {}
         for pn, path in protein_sources:
-            counts, locus_cdna = compute_counts_for_protein(path, windows_bed, binf_index, args.window, n_binf)
+            counts, locus_cdna, central_max = compute_counts_for_protein(
+                path, windows_bed, binf_index, args.window, n_binf, args.central_window)
             totals, variance, skew, kurt, maxoff = compute_summary_stats(counts, args.window)
             reg = region_cdna(path, norm_merged, tmpdir)
             scale = PER_MILLION / reg if reg > 0 else 0.0
@@ -692,7 +703,7 @@ def main():
                 "region_cdna": reg,
                 "scale": scale,
                 "prop": locus_cdna / reg if reg > 0 else float("nan"),
-                "central": float(np.log1p((counts.astype(np.float64) @ central) * scale).mean())
+                "central": float(np.log1p(central_max * scale).mean())
                 if reg > 0 else float("nan"),
                 "total": float(totals.sum()),
                 "n_sig": int(has.sum()),
@@ -710,9 +721,11 @@ def main():
                   f"binding scores are NA and they rank last: {', '.join(no_region[:5])}" + (" ..." if len(no_region) > 5 else ""))
 
         # ---- 2. rank by central binding, keep the top --support-pct ----
-        # central_binding = mean over ALL loci of log1p(support within +/-central-window nt of the
-        # locus, per M region cDNA). Each part answers a failure seen on the THRAP3 runs:
+        # central_binding = mean over ALL loci of log1p(the strongest single peak's cDNA inside
+        # +/-central-window nt of the locus, per M region cDNA). Each part answers a failure seen
+        # on the THRAP3 runs:
         #   - the central window counts binding at the locus, not binding 50-100 nt away;
+        #   - one peak per locus, so several matches at a locus are not added together;
         #   - dividing by region cDNA takes sequencing depth out;
         #   - log1p stops a few loci deciding the rank: raw mean support was led by K562-SSB,
         #     97% of whose support came from 22 loci;
