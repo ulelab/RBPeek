@@ -29,8 +29,8 @@ under Python 3.6 on the login node.
 | file | contents |
 |---|---|
 | `sample_summary.tsv` | one row per panel sample, sorted by rank ([columns](#sample_summarytsv)) |
-| `metaprofile.pdf` | mean normalised support vs offset, first 10 selected samples |
-| `binf_support_heatmap.pdf` | loci × selected samples, normalised support; titled with the BED name, selection and locus count |
+| `metaprofile.pdf` | mean normalised profile of each locus's strongest central peak vs offset, first 10 selected samples |
+| `binf_support_heatmap.pdf` | loci × selected samples, each cell the strongest central peak; titled with the BED name, selection and locus count |
 | `binf_summary_tsne.png` | tSNE of the heatmap loci (`--tsne`) |
 | `binf_heatmap_clusters.tsv`, `metaprofile_cluster_C*.pdf` | k-means clusters of the heatmap loci, one metaprofile per cluster (`-n`) |
 
@@ -68,21 +68,24 @@ panel.
    - `locus_cdna`: its cDNA inside any locus window, each distinct peak counted once.
    - `proportional_binding` = `locus_cdna / region_cdna`.
 3. **Ranking.** `central_binding` = mean over **all** loci of
-   `log1p(strongest peak's cDNA inside ±central-window × 10⁶ / region_cdna)`.
+   `log1p(support within ±central-window × 10⁶ / region_cdna)`. Every peak in the window counts.
    - The central window means only binding at the locus counts.
-   - If several peaks touch the window, only the one with the most cDNA inside it counts.
    - Dividing by `region_cdna` removes sequencing depth.
    - `log1p` stops a few very strong loci from deciding the rank.
    - Averaging over all loci scores unbound loci as 0. That keeps sparse samples down, but a
      sample binding a few loci very strongly ranks below one binding many loci moderately.
 
    Samples with no region cDNA or no support at the loci are never selected.
-4. **Figures.**
-   - Values are per-locus support × 10⁶ / `region_cdna`.
+4. **Figures.** These draw one match per locus; the ranking above still counts every peak.
+   - At each locus, only the sample's **strongest central peak** is drawn: the peak with the most
+     cDNA inside ±central-window. Values are × 10⁶ / `region_cdna`.
+   - A heatmap cell is that peak's cDNA inside the window. The metaprofile averages that peak
+     alone, spread over its width, so it can extend past ±central-window but other peaks at the
+     locus are not drawn.
    - The heatmap is `log1p`-transformed, scaled to the `--heatmap-scale-percentile` of non-zero
-     cells, and drops loci with no support from any selected sample.
+     cells, and drops loci with no central peak from any selected sample.
    - Heatmap rows follow a cosine-distance sample dendrogram, and the bracketed number is the
-     rank. Loci are ordered by total support, or by cluster with `-n`.
+     rank. Loci are ordered by summed cell value, or by cluster with `-n`.
    - The metaprofile's right axis is its left axis × the number of loci.
    - PDFs embed TrueType fonts, and heatmap cells are rasterised at 200 dpi. k-means and tSNE use
      a fixed seed.

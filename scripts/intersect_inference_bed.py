@@ -9,11 +9,11 @@ Workflow
   2. Normalise: proportional_binding = cDNA of the sample's DISTINCT peaks inside the
      windows / the sample's peak cDNA inside --norm-bed, mitochondrial peaks excluded; each
      peak counts by the fraction of its width inside.
-  3. Rank samples by central binding - mean over all loci of log1p(the strongest single
-     peak's cDNA inside +/---central-window nt, per M region cDNA) - and keep the top
-     --support-pct percent.
+  3. Rank samples by central binding - mean over all loci of log1p(support within
+     +/---central-window nt, per M region cDNA) - and keep the top --support-pct percent.
   4. Plot the metaprofile (first 10 of those), write sample_summary.tsv, then plot the
-     heatmap and optional tSNE over the kept samples.
+     heatmap and optional tSNE over the kept samples. The figures draw only each locus's
+     strongest central peak; the ranking counts every peak.
 
 Inference loci are anchored at (start+end)//2. Panel intervals are spread across their width,
 which for a 1 nt crosslink site puts the whole score at the site itself.
@@ -66,7 +66,7 @@ METAPROFILE_MAX = 10
 # rather than by where they bind.
 CHRM = {"chrM", "chrMT", "MT", "M"}
 PER_MILLION = 1e6
-METAPROFILE_YLABEL = "Mean support per locus (per M region cDNA, smoothed)"
+METAPROFILE_YLABEL = "Strongest central peak, mean per locus (per M region cDNA, smoothed)"
 
 
 def parse_args():
@@ -110,8 +110,8 @@ def parse_args():
         default=10,
         help=(
             "Half-width (nt) of the window around nt 0 counted by the ranking score (default 10, "
-            "i.e. offsets -10..+10). Per locus, only the peak with the most cDNA inside it counts; "
-            "binding outside it does not affect the rank."
+            "i.e. offsets -10..+10). Every peak inside it counts toward the rank; the figures draw "
+            "only the peak with the most cDNA inside it."
         ),
     )
     p.add_argument("--heatmap-scale-percentile", type=float, default=99.0,
@@ -334,16 +334,18 @@ def compute_counts_for_protein(panel_bed: Path, windows_bed: Path, binf_index, w
     numerator for a proportion - 76% of the THRAP3 exonic loci have a same-strand neighbour
     within 200 nt, and summing per window inflated totals ~1.76x.
 
-    Also returns central_max: per locus, the largest single-peak contribution inside
-    +/-central_window (score x overlap / width). When several peaks touch the central window only
-    the strongest counts toward the ranking, and a large peak clipping the edge cannot beat a
-    smaller one sitting on the locus. counts itself still holds every peak.
+    Also returns, FOR THE FIGURES ONLY, each locus's strongest central peak: the peak with the
+    most cDNA inside +/-central_window (score x overlap / width), so a large peak clipping the
+    edge cannot beat a smaller one sitting on the locus. central_max is that in-window cDNA per
+    locus, and best_counts holds the winning peak alone, spread over its width like counts. The
+    ranking uses counts, where every peak is present.
 
     Window columns are read from the END of each intersect row, so panel files with more than
     six columns are handled.
     """
     counts = np.zeros((n_binf, 2 * window + 1), dtype=np.float32)
     central_max = np.zeros(n_binf, dtype=np.float64)
+    best_counts = np.zeros_like(counts)
     covered: dict[tuple[str, int, int, str], list] = {}
     cmd = ["bedtools", "intersect", "-a", str(panel_bed), "-b", str(windows_bed), "-s", "-wa", "-wb"]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
@@ -368,7 +370,12 @@ def compute_counts_for_protein(panel_bed: Path, windows_bed: Path, binf_index, w
         counts[idx_list, a + window:b + window + 1] += score / width
         clo, chi = max(start, anchor - central_window), min(end - 1, anchor + central_window)
         if clo <= chi:
-            central_max[idx_list] = np.maximum(central_max[idx_list], score * (chi - clo + 1) / width)
+            val = score * (chi - clo + 1) / width
+            for i in idx_list:
+                if val > central_max[i]:
+                    central_max[i] = val
+                    best_counts[i, :] = 0.0
+                    best_counts[i, a + window:b + window + 1] = score / width
         entry = covered.get((f[0], start, end, f[5]))
         if entry is None:
             covered[(f[0], start, end, f[5])] = [score, width, [(lo, hi)]]
@@ -391,7 +398,7 @@ def compute_counts_for_protein(panel_bed: Path, windows_bed: Path, binf_index, w
                 cur_hi = max(cur_hi, hi)
         inside += cur_hi - cur_lo + 1
         locus_cdna += score * inside / width
-    return counts, locus_cdna, central_max
+    return counts, locus_cdna, central_max, best_counts
 
 
 def merge_regions(bed: Path, tmpdir: Path) -> Path:
@@ -568,7 +575,7 @@ def render_metaprofile(offsets, profiles, order, legend, n_loci, window, out_pat
 
 
 def plot_cluster_metaprofiles(protein_sources, order, scale, cluster_ids, labels, windows_bed,
-                              binf_index, window, n_binf, sigma, outdir) -> None:
+                              binf_index, window, n_binf, sigma, outdir, central_window) -> None:
     """One normalised metaprofile per k-means cluster, over the same samples as the global one."""
     offsets = np.arange(-window, window + 1, dtype=np.int64)
     masks = {cid: labels == cid for cid in cluster_ids}
@@ -578,13 +585,13 @@ def plot_cluster_metaprofiles(protein_sources, order, scale, cluster_ids, labels
     for pn, path in protein_sources:
         if pn not in wanted:
             continue
-        counts, _, _ = compute_counts_for_protein(path, windows_bed, binf_index, window, n_binf)
+        _, _, cmax, best = compute_counts_for_protein(path, windows_bed, binf_index, window, n_binf, central_window)
         for cid in cluster_ids:
             m = masks[cid]
             if not m.any():
                 continue
-            profiles[cid][pn] = smooth_metaprofile_gaussian(counts[m].mean(axis=0), sigma) * scale[pn]
-            shares[cid][pn] = f"{float(counts[m].sum()) * scale[pn] / PER_MILLION:.2%} of region cDNA"
+            profiles[cid][pn] = smooth_metaprofile_gaussian(best[m].mean(axis=0), sigma) * scale[pn]
+            shares[cid][pn] = f"{float(cmax[m].sum()) * scale[pn] / PER_MILLION:.2%} of region cDNA"
     for cid in cluster_ids:
         if not profiles[cid]:
             continue
@@ -684,26 +691,28 @@ def main():
         protein_names = [name for name, _ in protein_sources]
         n_binf = len(binf_keys)
         offsets = np.arange(-args.window, args.window + 1, dtype=np.int64)
+        # Offsets counted by the ranking score: 1 within +/-central-window nt of the locus, else 0.
+        central = (np.abs(offsets) <= args.central_window).astype(np.float64)
 
         # ---- 1. per-sample counts, statistics and normalisation ----
-        totals_by: dict[str, np.ndarray] = {}
+        best_by: dict[str, np.ndarray] = {}
         profiles: dict[str, np.ndarray] = {}
         stats: dict[str, dict] = {}
         for pn, path in protein_sources:
-            counts, locus_cdna, central_max = compute_counts_for_protein(
+            counts, locus_cdna, central_max, best_counts = compute_counts_for_protein(
                 path, windows_bed, binf_index, args.window, n_binf, args.central_window)
             totals, variance, skew, kurt, maxoff = compute_summary_stats(counts, args.window)
             reg = region_cdna(path, norm_merged, tmpdir)
             scale = PER_MILLION / reg if reg > 0 else 0.0
             has = totals > 0
-            totals_by[pn] = totals
-            profiles[pn] = smooth_metaprofile_gaussian(counts.mean(axis=0), args.gaussian_sigma) * scale
+            best_by[pn] = central_max
+            profiles[pn] = smooth_metaprofile_gaussian(best_counts.mean(axis=0), args.gaussian_sigma) * scale
             stats[pn] = {
                 "locus_cdna": locus_cdna,
                 "region_cdna": reg,
                 "scale": scale,
                 "prop": locus_cdna / reg if reg > 0 else float("nan"),
-                "central": float(np.log1p(central_max * scale).mean())
+                "central": float(np.log1p((counts.astype(np.float64) @ central) * scale).mean())
                 if reg > 0 else float("nan"),
                 "total": float(totals.sum()),
                 "n_sig": int(has.sum()),
@@ -721,11 +730,10 @@ def main():
                   f"binding scores are NA and they rank last: {', '.join(no_region[:5])}" + (" ..." if len(no_region) > 5 else ""))
 
         # ---- 2. rank by central binding, keep the top --support-pct ----
-        # central_binding = mean over ALL loci of log1p(the strongest single peak's cDNA inside
-        # +/-central-window nt of the locus, per M region cDNA). Each part answers a failure seen
-        # on the THRAP3 runs:
+        # central_binding = mean over ALL loci of log1p(support within +/-central-window nt of the
+        # locus, per M region cDNA). Every peak in the window counts here; only the figures are
+        # restricted to the strongest one. Each part answers a failure seen on the THRAP3 runs:
         #   - the central window counts binding at the locus, not binding 50-100 nt away;
-        #   - one peak per locus, so several matches at a locus are not added together;
         #   - dividing by region cDNA takes sequencing depth out;
         #   - log1p stops a few loci deciding the rank: raw mean support was led by K562-SSB,
         #     97% of whose support came from 22 loci;
@@ -736,12 +744,12 @@ def main():
                         reverse=True)
         rank = {pn: i + 1 for i, pn in enumerate(ranked)}
         k_sel = max(1, math.ceil(args.support_pct / 100.0 * len(ranked)))
-        # Only samples with region cDNA and some support can be selected: either one missing gives
+        # Only samples with region cDNA and a central peak somewhere can be selected: either one missing gives
         # an all-zero heatmap column, and cosine distance to a zero vector is undefined. Such
         # samples already rank last, so this never changes an ordinary selection.
-        selected = [pn for pn in ranked if stats[pn]["region_cdna"] > 0 and stats[pn]["total"] > 0][:k_sel]
+        selected = [pn for pn in ranked if stats[pn]["region_cdna"] > 0 and best_by[pn].any()][:k_sel]
         if not selected:
-            raise ValueError("No sample has region cDNA and support at these loci; nothing to plot.")
+            raise ValueError("No sample has region cDNA and a central peak at these loci; nothing to plot.")
         if len(selected) < k_sel:
             print(f"Note: only {len(selected)} of the {k_sel} requested samples have region cDNA and support at these loci")
         print(f"Selected the top {len(selected)} of {len(ranked)} samples ({args.support_pct:g}%) by central binding "
@@ -782,10 +790,10 @@ def main():
         print(f"Wrote sample summary to: {table_path}")
 
         # ---- 5. heatmap over the selected samples ----
-        matrix = np.column_stack([totals_by[pn] * stats[pn]["scale"] for pn in selected])
+        matrix = np.column_stack([best_by[pn] * stats[pn]["scale"] for pn in selected])
         row_sums = matrix.sum(axis=1)
         keep = row_sums > 0
-        print(f"Heatmap: {int(keep.sum()):,} of {n_binf:,} loci have support from at least one selected sample")
+        print(f"Heatmap: {int(keep.sum()):,} of {n_binf:,} loci have a central peak from at least one selected sample")
         if not keep.any():
             raise ValueError("No locus has support from any selected sample; nothing to plot.")
         matrix_kept = matrix[keep]
@@ -819,7 +827,7 @@ def main():
         display = scaled[sort_idx]
 
         col_linkage = linkage(pdist(scaled.T, metric="cosine"), method="average") if scaled.shape[1] > 1 else None
-        cbar_label = f"log1p support per M region cDNA\n({args.heatmap_scale_percentile:g}th pct clip)"
+        cbar_label = f"log1p strongest central peak per M region cDNA\n({args.heatmap_scale_percentile:g}th pct clip)"
         n_prot = display.shape[1]
         # Transposed so sample names read horizontally on the left; loci run along the x-axis.
         heatmap_fig = sns.clustermap(
@@ -876,7 +884,7 @@ def main():
         # colour bar, so a title there never collides with the data.
         heatmap_fig.ax_col_dendrogram.set_title(
             f"{binf_path.stem}: top {len(selected)} of {len(ranked)} samples by central binding "
-            f"(±{args.central_window} nt)   |   {int(keep.sum()):,} loci with support",
+            f"(±{args.central_window} nt)   |   {int(keep.sum()):,} loci with a central peak",
             loc="left", fontsize=10,
         )
         heatmap_path = outdir / "binf_support_heatmap.pdf"
@@ -900,6 +908,7 @@ def main():
             plot_cluster_metaprofiles(
                 protein_sources, meta_set, {pn: stats[pn]["scale"] for pn in meta_set}, cluster_ids,
                 labels_all, windows_bed, binf_index, args.window, n_binf, args.gaussian_sigma, outdir,
+                args.central_window,
             )
 
         # ---- 7. tSNE ----
