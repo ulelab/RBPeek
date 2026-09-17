@@ -526,7 +526,7 @@ def percentile_scale(matrix: np.ndarray, pct: float) -> np.ndarray:
     return np.clip(dense / hi, 0.0, 1.0)
 
 
-def render_metaprofile(offsets, profiles, order, legend, n_loci, window, out_path, title) -> None:
+def render_metaprofile(offsets, profiles, order, legend, n_loci, window, out_path, title, central_window) -> None:
     """
     One metaprofile panel. Left axis: mean normalised support per locus, every locus in the
     denominator. Right axis: the same curve times n_loci - one constant, so both axes
@@ -548,6 +548,9 @@ def render_metaprofile(offsets, profiles, order, legend, n_loci, window, out_pat
             linewidth=2,
         )
     ax.axvline(0, color="black", linewidth=1, alpha=0.4)
+    # Mark the +/-central-window that the ranking score counts.
+    for edge in (-central_window, central_window):
+        ax.axvline(edge, color="red", linestyle=":", linewidth=1.2)
     ax.set_xlabel("Relative nucleotide position around inference loci (nt)")
     ax.set_ylabel(METAPROFILE_YLABEL)
     ax.set_xlim(-window, window)
@@ -568,7 +571,7 @@ def render_metaprofile(offsets, profiles, order, legend, n_loci, window, out_pat
 
 
 def plot_cluster_metaprofiles(protein_sources, order, scale, cluster_ids, labels, windows_bed,
-                              binf_index, window, n_binf, sigma, outdir) -> None:
+                              binf_index, window, n_binf, sigma, outdir, central_window, region) -> None:
     """One normalised metaprofile per k-means cluster, over the same samples as the global one."""
     offsets = np.arange(-window, window + 1, dtype=np.int64)
     masks = {cid: labels == cid for cid in cluster_ids}
@@ -591,7 +594,8 @@ def plot_cluster_metaprofiles(protein_sources, order, scale, cluster_ids, labels
         n = int(masks[cid].sum())
         out = outdir / f"metaprofile_cluster_C{cid}.pdf"
         render_metaprofile(offsets, profiles[cid], [pn for pn in order if pn in profiles[cid]],
-                           shares[cid], n, window, out, f"Cluster C{cid} metaprofile   |   n = {n:,} loci")
+                           shares[cid], n, window, out,
+                           f"{region}: cluster C{cid} metaprofile   |   n = {n:,} loci", central_window)
         print(f"Wrote cluster metaprofile plot to: {out}")
 
 
@@ -759,8 +763,10 @@ def main():
             offsets, profiles, meta_set,
             {pn: f"central binding {stats[pn]['central']:.3f}" for pn in meta_set},
             n_binf, args.window, meta_path,
-            f"Top {len(meta_set)} of {len(ranked)} samples by central binding (±{args.central_window} nt)"
+            f"{binf_path.stem}: top {len(meta_set)} of {len(ranked)} samples by central binding "
+            f"(±{args.central_window} nt, red dotted lines)"
             f"   |   n = {n_binf:,} loci",
+            args.central_window,
         )
         print(f"Wrote metaprofile plot to: {meta_path}")
 
@@ -901,6 +907,7 @@ def main():
             plot_cluster_metaprofiles(
                 protein_sources, meta_set, {pn: stats[pn]["scale"] for pn in meta_set}, cluster_ids,
                 labels_all, windows_bed, binf_index, args.window, n_binf, args.gaussian_sigma, outdir,
+                args.central_window, binf_path.stem,
             )
 
         # ---- 7. tSNE ----

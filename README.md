@@ -88,7 +88,8 @@ panel files.
 4. **Figures.** All plotted values are scaled by 10⁶ / `region_cdna`.
    - The metaprofile is the mean support at each offset across ±`--window`, including every
      peak, smoothed with a Gaussian kernel. The right axis is the left axis multiplied by the
-     number of loci.
+     number of loci. Red dotted lines mark ±central-window, and the title names the
+     inference BED (and therefore the region).
    - Each heatmap cell is the sample's **strongest central peak** at that locus: the cDNA inside
      ±central-window of the peak contributing the most cDNA there. The ranking, in contrast,
      sums all peaks.
