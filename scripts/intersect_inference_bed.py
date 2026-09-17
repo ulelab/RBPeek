@@ -12,8 +12,8 @@ Workflow
   3. Rank samples by central binding - mean over all loci of log1p(support within
      +/---central-window nt, per M region cDNA) - and keep the top --support-pct percent.
   4. Plot the metaprofile (first 10 of those), write sample_summary.tsv, then plot the
-     heatmap and optional tSNE over the kept samples. The figures draw only each locus's
-     strongest central peak; the ranking counts every peak.
+     heatmap and optional tSNE over the kept samples. Heatmap cells show only each locus's
+     strongest central peak; the ranking and the metaprofile count every peak.
 
 Inference loci are anchored at (start+end)//2. Panel intervals are spread across their width,
 which for a 1 nt crosslink site puts the whole score at the site itself.
@@ -66,7 +66,7 @@ METAPROFILE_MAX = 10
 # rather than by where they bind.
 CHRM = {"chrM", "chrMT", "MT", "M"}
 PER_MILLION = 1e6
-METAPROFILE_YLABEL = "Strongest central peak, mean per locus (per M region cDNA, smoothed)"
+METAPROFILE_YLABEL = "Mean support per locus (per M region cDNA, smoothed)"
 
 
 def parse_args():
@@ -110,8 +110,8 @@ def parse_args():
         default=10,
         help=(
             "Half-width (nt) of the window around nt 0 counted by the ranking score (default 10, "
-            "i.e. offsets -10..+10). Every peak inside it counts toward the rank; the figures draw "
-            "only the peak with the most cDNA inside it."
+            "i.e. offsets -10..+10). Every peak inside it counts toward the rank; a heatmap cell "
+            "shows only the peak with the most cDNA inside it."
         ),
     )
     p.add_argument("--heatmap-scale-percentile", type=float, default=99.0,
@@ -334,18 +334,16 @@ def compute_counts_for_protein(panel_bed: Path, windows_bed: Path, binf_index, w
     numerator for a proportion - 76% of the THRAP3 exonic loci have a same-strand neighbour
     within 200 nt, and summing per window inflated totals ~1.76x.
 
-    Also returns, FOR THE FIGURES ONLY, each locus's strongest central peak: the peak with the
-    most cDNA inside +/-central_window (score x overlap / width), so a large peak clipping the
-    edge cannot beat a smaller one sitting on the locus. central_max is that in-window cDNA per
-    locus, and best_counts holds the winning peak alone, spread over its width like counts. The
-    ranking uses counts, where every peak is present.
+    Also returns central_max, FOR THE HEATMAP ONLY: per locus, the in-window cDNA of the peak
+    with the most cDNA inside +/-central_window (score x overlap / width), so a large peak
+    clipping the edge cannot beat a smaller one sitting on the locus. The ranking and the
+    metaprofile use counts, where every peak is present.
 
     Window columns are read from the END of each intersect row, so panel files with more than
     six columns are handled.
     """
     counts = np.zeros((n_binf, 2 * window + 1), dtype=np.float32)
     central_max = np.zeros(n_binf, dtype=np.float64)
-    best_counts = np.zeros_like(counts)
     covered: dict[tuple[str, int, int, str], list] = {}
     cmd = ["bedtools", "intersect", "-a", str(panel_bed), "-b", str(windows_bed), "-s", "-wa", "-wb"]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
@@ -370,12 +368,7 @@ def compute_counts_for_protein(panel_bed: Path, windows_bed: Path, binf_index, w
         counts[idx_list, a + window:b + window + 1] += score / width
         clo, chi = max(start, anchor - central_window), min(end - 1, anchor + central_window)
         if clo <= chi:
-            val = score * (chi - clo + 1) / width
-            for i in idx_list:
-                if val > central_max[i]:
-                    central_max[i] = val
-                    best_counts[i, :] = 0.0
-                    best_counts[i, a + window:b + window + 1] = score / width
+            central_max[idx_list] = np.maximum(central_max[idx_list], score * (chi - clo + 1) / width)
         entry = covered.get((f[0], start, end, f[5]))
         if entry is None:
             covered[(f[0], start, end, f[5])] = [score, width, [(lo, hi)]]
@@ -398,7 +391,7 @@ def compute_counts_for_protein(panel_bed: Path, windows_bed: Path, binf_index, w
                 cur_hi = max(cur_hi, hi)
         inside += cur_hi - cur_lo + 1
         locus_cdna += score * inside / width
-    return counts, locus_cdna, central_max, best_counts
+    return counts, locus_cdna, central_max
 
 
 def merge_regions(bed: Path, tmpdir: Path) -> Path:
@@ -575,7 +568,7 @@ def render_metaprofile(offsets, profiles, order, legend, n_loci, window, out_pat
 
 
 def plot_cluster_metaprofiles(protein_sources, order, scale, cluster_ids, labels, windows_bed,
-                              binf_index, window, n_binf, sigma, outdir, central_window) -> None:
+                              binf_index, window, n_binf, sigma, outdir) -> None:
     """One normalised metaprofile per k-means cluster, over the same samples as the global one."""
     offsets = np.arange(-window, window + 1, dtype=np.int64)
     masks = {cid: labels == cid for cid in cluster_ids}
@@ -585,13 +578,13 @@ def plot_cluster_metaprofiles(protein_sources, order, scale, cluster_ids, labels
     for pn, path in protein_sources:
         if pn not in wanted:
             continue
-        _, _, cmax, best = compute_counts_for_protein(path, windows_bed, binf_index, window, n_binf, central_window)
+        counts, _, _ = compute_counts_for_protein(path, windows_bed, binf_index, window, n_binf)
         for cid in cluster_ids:
             m = masks[cid]
             if not m.any():
                 continue
-            profiles[cid][pn] = smooth_metaprofile_gaussian(best[m].mean(axis=0), sigma) * scale[pn]
-            shares[cid][pn] = f"{float(cmax[m].sum()) * scale[pn] / PER_MILLION:.2%} of region cDNA"
+            profiles[cid][pn] = smooth_metaprofile_gaussian(counts[m].mean(axis=0), sigma) * scale[pn]
+            shares[cid][pn] = f"{float(counts[m].sum()) * scale[pn] / PER_MILLION:.2%} of region cDNA"
     for cid in cluster_ids:
         if not profiles[cid]:
             continue
@@ -699,14 +692,14 @@ def main():
         profiles: dict[str, np.ndarray] = {}
         stats: dict[str, dict] = {}
         for pn, path in protein_sources:
-            counts, locus_cdna, central_max, best_counts = compute_counts_for_protein(
+            counts, locus_cdna, central_max = compute_counts_for_protein(
                 path, windows_bed, binf_index, args.window, n_binf, args.central_window)
             totals, variance, skew, kurt, maxoff = compute_summary_stats(counts, args.window)
             reg = region_cdna(path, norm_merged, tmpdir)
             scale = PER_MILLION / reg if reg > 0 else 0.0
             has = totals > 0
             best_by[pn] = central_max
-            profiles[pn] = smooth_metaprofile_gaussian(best_counts.mean(axis=0), args.gaussian_sigma) * scale
+            profiles[pn] = smooth_metaprofile_gaussian(counts.mean(axis=0), args.gaussian_sigma) * scale
             stats[pn] = {
                 "locus_cdna": locus_cdna,
                 "region_cdna": reg,
@@ -731,7 +724,7 @@ def main():
 
         # ---- 2. rank by central binding, keep the top --support-pct ----
         # central_binding = mean over ALL loci of log1p(support within +/-central-window nt of the
-        # locus, per M region cDNA). Every peak in the window counts here; only the figures are
+        # locus, per M region cDNA). Every peak in the window counts here; only the heatmap is
         # restricted to the strongest one. Each part answers a failure seen on the THRAP3 runs:
         #   - the central window counts binding at the locus, not binding 50-100 nt away;
         #   - dividing by region cDNA takes sequencing depth out;
@@ -908,7 +901,6 @@ def main():
             plot_cluster_metaprofiles(
                 protein_sources, meta_set, {pn: stats[pn]["scale"] for pn in meta_set}, cluster_ids,
                 labels_all, windows_bed, binf_index, args.window, n_binf, args.gaussian_sigma, outdir,
-                args.central_window,
             )
 
         # ---- 7. tSNE ----

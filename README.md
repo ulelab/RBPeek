@@ -29,7 +29,7 @@ under Python 3.6 on the login node.
 | file | contents |
 |---|---|
 | `sample_summary.tsv` | one row per panel sample, sorted by rank ([columns](#sample_summarytsv)) |
-| `metaprofile.pdf` | mean normalised profile of each locus's strongest central peak vs offset, first 10 selected samples |
+| `metaprofile.pdf` | mean normalised support vs offset across ±`--window`, first 10 selected samples |
 | `binf_support_heatmap.pdf` | loci × selected samples, each cell the strongest central peak; titled with the BED name, selection and locus count |
 | `binf_summary_tsne.png` | tSNE of the heatmap loci (`--tsne`) |
 | `binf_heatmap_clusters.tsv`, `metaprofile_cluster_C*.pdf` | k-means clusters of the heatmap loci, one metaprofile per cluster (`-n`) |
@@ -76,12 +76,10 @@ panel.
      sample binding a few loci very strongly ranks below one binding many loci moderately.
 
    Samples with no region cDNA or no support at the loci are never selected.
-4. **Figures.** These draw one match per locus; the ranking above still counts every peak.
-   - At each locus, only the sample's **strongest central peak** is drawn: the peak with the most
-     cDNA inside ±central-window. Values are × 10⁶ / `region_cdna`.
-   - A heatmap cell is that peak's cDNA inside the window. The metaprofile averages that peak
-     alone, spread over its width, so it can extend past ±central-window but other peaks at the
-     locus are not drawn.
+4. **Figures.** Values are × 10⁶ / `region_cdna`.
+   - The metaprofile averages all support at each offset across ±`--window`, every peak included.
+   - A heatmap cell is the sample's **strongest central peak** at that locus: the cDNA inside
+     ±central-window of the peak with the most cDNA there. The ranking still counts every peak.
    - The heatmap is `log1p`-transformed, scaled to the `--heatmap-scale-percentile` of non-zero
      cells, and drops loci with no central peak from any selected sample.
    - Heatmap rows follow a cosine-distance sample dendrogram, and the bracketed number is the
