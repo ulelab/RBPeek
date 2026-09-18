@@ -1,32 +1,27 @@
 #!/usr/bin/env python3
 """
-Split an inference BED into exonic and intronic subsets so the same loci can be run
-through intersect_inference_bed.py twice and the two profiles compared.
+Partition an inference BED into exonic and intronic loci, and write the corresponding
+normalisation regions for intersect_inference_bed.py (--norm-bed).
 
-Classification is strand-aware and exon-priority:
+Classification is strand-aware and gives exons priority:
 
-  exonic     the anchor falls inside an annotated exon on its own strand
-  intronic   the anchor falls inside a gene on its own strand but in no exon
-  intergenic neither; counted in the summary, not written
+  exonic      the anchor lies within an annotated exon on the same strand
+  intronic    the anchor lies within a gene on the same strand but in no exon
+  intergenic  neither; counted in the summary but not written
 
-Exon-priority matters because an anchor can be exonic in one transcript and intronic in
-another. Merging every transcript's exons before classifying resolves that consistently: an
-anchor exonic in ANY transcript is exonic here, and intronic means 'inside a gene and in no
-merged exon'. The two sets are therefore disjoint by construction and can be compared
-without double-counting.
+The exons of all transcripts are merged before classification, so an anchor that is exonic in
+any transcript is classified as exonic, and "intronic" means within a gene and outside every
+merged exon. The two sets are therefore disjoint. An anchor within a gene on the opposite
+strand is intergenic with respect to that gene.
 
-Strandedness is not optional here: an anchor sitting inside a gene on the opposite strand is
-intergenic with respect to that gene, and treating it otherwise would put antisense loci in
-the intronic set.
+Outputs
+  <prefix>_exonic.bed, <prefix>_intronic.bed   the two locus sets
+  regions_exonic.bed                           merged exons, per strand
+  regions_intronic.bed                         gene bodies minus merged exons, per strand
 
-Also writes the two region BEDs intersect_inference_bed.py normalises against (--norm-bed):
-
-  regions_exonic.bed    merged exons, strand-aware
-  regions_intronic.bed  gene bodies minus merged exons, strand-aware
-
---drop-chrM removes mitochondrial anchors before classifying. Mitochondrial genes have no
-introns, so this only ever changes the exonic set; there it matters, because mt-rRNA is a
-large eCLIP background that swamps the panel signal at those loci.
+--drop-chrM removes mitochondrial anchors before classification. Mitochondrial rRNA is a major
+source of background in eCLIP libraries, and intersect_inference_bed.py excludes mitochondrial
+peaks from its normalisation.
 """
 
 import argparse
@@ -35,23 +30,15 @@ import subprocess
 import sys
 from pathlib import Path
 
-# GENCODE v39, hg38. This is the "filtered main" annotation, i.e. the same flavour Clippy
-# was run against, so exon/intron calls here line up with how the peaks were defined.
-# GENCODE is chr-prefixed like the inference BED, so no chromosome renaming is needed.
-DEFAULT_GTF = "/camp/lab/ulej/home/shared/genomes/hg38/gencodev39_annotation/filtered.gencode.v39.main.annotation.gtf"
 CHRM = {"chrM", "chrMT", "MT", "M"}
 
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("-b", "--bed", required=True, type=Path, help="Inference BED (BED6, 1 nt anchors)")
-    p.add_argument(
-        "-g",
-        "--gtf",
-        type=Path,
-        default=Path(DEFAULT_GTF),
-        help="Gene annotation GTF, must match the BED's assembly (default: %s)" % DEFAULT_GTF,
-    )
+    p.add_argument("-g", "--gtf", required=True, type=Path,
+                   help="Gene annotation GTF of the same assembly as the BED (the THRAP3 analysis used "
+                        "GENCODE v39, GRCh38)")
     p.add_argument("-o", "--outdir", type=Path, default=Path("THRAP3"), help="Output directory")
     p.add_argument("--prefix", default=None, help="Output basename (default: the input BED's stem)")
     p.add_argument("--drop-chrM", dest="drop_chrm", action="store_true",
@@ -65,8 +52,7 @@ def parse_args():
 
 
 def run(cmd, stdout=None):
-    # universal_newlines rather than text=: text= is Python 3.7+, and this script is
-    # routinely run with the login node's system python, which is 3.6.
+    # universal_newlines is used in place of text= for compatibility with Python 3.6.
     r = subprocess.run(cmd, stdout=stdout, stderr=subprocess.PIPE, universal_newlines=True)
     if r.returncode != 0:
         sys.exit(f"command failed: {' '.join(str(c) for c in cmd)}\n{r.stderr[:600]}")
@@ -98,7 +84,6 @@ def gtf_to_bed(gtf: Path, feature: str, out: Path, chr_prefix: bool) -> int:
             c = line.rstrip("\n").split("\t")
             fout.write("\t".join([c[0], c[1], c[2], ".", ".", c[3]]) + "\n")
     padded.replace(out)
-    # Path.unlink(missing_ok=) is Python 3.8+; guard instead.
     for tmp in (raw, srt):
         if tmp.exists():
             tmp.unlink()
@@ -113,12 +98,8 @@ def subset(anchors: Path, regions: Path, out: Path, invert: bool = False) -> int
 
 
 def require(tool):
-    """Fail with a usable message rather than a bare FileNotFoundError from subprocess."""
     if shutil.which(tool) is None:
-        sys.exit(
-            f"{tool} not found on PATH. Activate the environment that provides it, e.g.:\n"
-            "  conda activate rbpeek"
-        )
+        sys.exit(f"{tool} not found on PATH")
 
 
 def main():
@@ -130,7 +111,7 @@ def main():
     work.mkdir(parents=True, exist_ok=True)
     prefix = args.prefix or args.bed.stem
 
-    # The inference BED is UCSC-style ("chr1"); Ensembl GTFs are not. Detect and match.
+    # Match the chromosome naming of the GTF to that of the inference BED.
     bed_chr = open(args.bed).readline().split("\t")[0].startswith("chr")
     gtf_chr = False
     with open(args.gtf) as fh:
@@ -194,9 +175,6 @@ def main():
     print(f"      intronic           {n_intronic:>8,}  ({100*n_intronic/total:5.1f}%)  -> {intronic}")
     print(f"      intergenic         {n_intergenic:>8,}  ({100*n_intergenic/total:5.1f}%)")
     print(f"      normalisation regions -> {reg_exonic}, {reg_intronic}")
-    print("      exon-priority: all transcripts' exons are merged first, so an anchor that is")
-    print("      exonic in ANY transcript is exonic here. The two sets are disjoint by")
-    print("      construction - intronic is 'genic AND in no merged exon'.")
     if n_exonic == 0 or n_intronic == 0:
         sys.exit("one subset is empty - check that the GTF assembly matches the inference BED")
 

@@ -1,10 +1,6 @@
-# Analysis outputs are copied from the HPC by hand, not versioned.
 results/
-# Working files the build and split scripts regenerate.
 THRAP3/work/
 THRAP3/region_work/
-# Local Centrosome working directories (not versioned).
-Centrosome/work/
-Centrosome/gene_counts/
+Centrosome/
 __pycache__/
 *:Zone.Identifier

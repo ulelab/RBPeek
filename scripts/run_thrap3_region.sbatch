@@ -5,16 +5,20 @@
 #SBATCH --cpus-per-task=20
 #SBATCH --output=slurm-thrap3-%x-%j.out
 
-# THRAP3 co-binding, split by transcript region.
+# THRAP3 co-binding analysis for one transcript region.
 #
 #   sbatch --job-name=thrap3_exonic   scripts/run_thrap3_region.sbatch exonic
 #   sbatch --job-name=thrap3_intronic scripts/run_thrap3_region.sbatch intronic
 #
-# Build the locus subsets and the normalisation regions once before submitting 
+# The locus sets and normalisation regions are generated beforehand with
 #
 #   python3 scripts/split_inference_bed_by_region.py \
-#     -b THRAP3/THRAP3_merged_min2rep_anchors.bed -o THRAP3 --drop-chrM
-
+#     -b THRAP3/THRAP3_merged_min2rep_anchors.bed -g <annotation.gtf> -o THRAP3 --drop-chrM
+#
+# Site-specific paths can be overridden through the environment:
+#   PANEL_DIR  directory against which the samplesheet paths are resolved
+#   GENOME     chromosome sizes file
+#   CONDA_SH   conda initialisation script
 
 set -euo pipefail
 
@@ -24,21 +28,22 @@ if [[ "$REGION" != "exonic" && "$REGION" != "intronic" ]]; then
   exit 2
 fi
 
+PANEL_DIR="${PANEL_DIR:-../CLIP}"
+GENOME="${GENOME:-/camp/home/jonesm6/home/shared/genomes/hg38/hg38.genome}"
+CONDA_SH="${CONDA_SH:-/camp/home/jonesm6/home/users/jonesm6/software/miniconda3/etc/profile.d/conda.sh}"
+
 cd "${SLURM_SUBMIT_DIR:-.}"
 
-source /camp/home/jonesm6/home/users/jonesm6/software/miniconda3/etc/profile.d/conda.sh
+source "$CONDA_SH"
 conda activate rbpeek
-
-which python
-python -c "import matplotlib, seaborn, sklearn; print('ok')"
 
 BINF="THRAP3/THRAP3_merged_min2rep_anchors_${REGION}.bed"
 NORM="THRAP3/regions_${REGION}.bed"
 OUT="results/thrap3_${REGION}"
 
-for f in "$BINF" "$NORM"; do
+for f in "$BINF" "$NORM" "$GENOME"; do
   if [ ! -s "$f" ]; then
-    echo "ERROR: $f missing. Run scripts/split_inference_bed_by_region.py first (see header)." >&2
+    echo "ERROR: $f not found" >&2
     exit 1
   fi
 done
@@ -48,12 +53,13 @@ echo "inference loci: $(wc -l < "$BINF")"
 mkdir -p "$OUT"
 
 python3 scripts/intersect_inference_bed.py \
-  -x ../CLIP \
+  -x "$PANEL_DIR" \
   -b "$BINF" \
   -s THRAP3/RBPeekSamplesheet_eCLIP.tsv \
   --norm-bed "$NORM" \
+  --genome "$GENOME" \
   -o "$OUT" \
   --window 100 \
+  --central-window 10 \
   --support-pct 20 \
-  --save-matrix \
   --tsne

@@ -1,33 +1,20 @@
 #!/usr/bin/env python3
 """
-Merge replicate peak BEDs by summing scores at IDENTICAL intervals.
+Pool replicate peak BEDs by summing scores at identical intervals.
 
-Implements the pipeline as specified:
-
-    cat *.bed | sort -k1,1 -k2,2n -k3,3n -k6,6 \\
+    cat <replicates> | sort -k1,1 -k2,2n -k3,3n -k6,6 \\
       | bedtools groupby -g 1,2,3,6 -c 5 -o sum
 
-then reformats groupby's output (chrom, start, end, strand, sum) back to BED6 by inserting
-a name column and returning strand to column 6.
+The output of groupby (chromosome, start, end, strand, summed score) is written as BED6, with
+a name column built from --label and the strand in column 6. The sort includes the end
+coordinate because groupby only combines adjacent records that share the full grouping key.
 
-Two deliberate departures from the pasted command:
+Records are combined only when chromosome, start, end and strand are identical, so the script
+pools signal across replicates and does not assess reproducibility. Overlap-based
+reproducibility filtering is implemented in build_thrap3_inference_bed.py.
 
-  * the stray `cat merged_Prpf8.bed` between the sort and the groupby is dropped - it
-    discards stdin and reads a file instead, so the sorted stream never reaches groupby.
-  * `-k3,3n` is added to the sort. groupby only merges ADJACENT rows sharing the group key,
-    and the key includes `end` (field 3). Without sorting on it, two rows with the same
-    chrom/start but different ends can interleave and split a group that should be one.
-
-What this does and does not do
-------------------------------
-Grouping is on EXACT chrom/start/end/strand, so only byte-identical intervals combine. That
-is the right operation for 1 nt crosslink sites. For peaks it collapses very little: on the
-four THRAP3 replicates, exact matching found 2+ replicate support at 4.5% of intervals where
-overlap-based merging found 36%. build_thrap3_inference_bed.py does
-overlap-based reproducibility instead; this script is for pooling replicate signal.
-
-Chromosome naming is left exactly as found. intersect_inference_bed.py harmonises panel
-naming against the inference BED at run time.
+Chromosome names are left unchanged; intersect_inference_bed.py harmonises panel naming with
+the inference BED at run time.
 """
 
 import argparse
@@ -47,7 +34,7 @@ def parse_args():
 def require(tool):
     from shutil import which
     if which(tool) is None:
-        sys.exit("%s not found on PATH. Try: conda activate rbpeek" % tool)
+        sys.exit("%s not found on PATH" % tool)
 
 
 def main():

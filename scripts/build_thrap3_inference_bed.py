@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """
-Build a THRAP3 inference BED (`binf`) for intersect_inference_bed.py Peak files
+Build the THRAP3 inference BED for intersect_inference_bed.py from replicate Clippy peak calls.
+
+  1. Chromosome names are converted to UCSC style (chr-prefixed; MT -> chrM) and, unless
+     --keep-scaffolds is given, records on non-primary contigs are removed.
+  2. Peaks from all replicates are pooled and overlapping peaks on the same strand are merged.
+  3. Merged regions supported by fewer than --min-reps distinct replicates are discarded.
+  4. Each remaining region is reduced to a 1 nt anchor, by default its midpoint.
 
 Output BED6:
-    chrom  start  end(=start+1)  name  score  strand
-
+    chrom  start  end (= start + 1)  name  score  strand
+where name is THRAP3_<n>reps_<i> and score is the number of supporting replicates.
 """
 
 import argparse
@@ -15,7 +21,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_RAW = REPO / "THRAP3" / "raw"
-# Flow sample name -> replicate label used in the peak filenames.
+# Sample name -> replicate label used in the peak file names.
 SAMPLE_TO_REP = {
     "THRAP3_1": "R1",
     "THRAP3_2": "R2",
@@ -27,7 +33,7 @@ SAMPLE_TO_REP = {
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--raw-dir", type=Path, default=DEFAULT_RAW,
-                   help="Directory holding the four *_genome.*_Peaks.bed files from Flow")
+                   help="Directory containing the replicate *_genome.*_Peaks.bed files")
     p.add_argument("--min-reps", type=int, default=2,
                    help="Keep merged regions supported by at least this many replicates (default 2)")
     p.add_argument("--anchor", choices=["midpoint", "start"], default="midpoint",
@@ -42,7 +48,7 @@ def parse_args():
 PRIMARY = {f"chr{c}" for c in list(range(1, 23)) + ["X", "Y", "M", "MT"]}
 
 
-def normalise(raw_dir, workdir, keep_scaffolds):  # unannotated: list[Path] needs Python 3.9+
+def normalise(raw_dir, workdir, keep_scaffolds):
     """Rewrite each replicate's peaks as sorted, chr-prefixed BED6 tagged with its replicate."""
     out = []
     for sample, rep in sorted(SAMPLE_TO_REP.items(), key=lambda kv: kv[1]):
@@ -67,8 +73,8 @@ def normalise(raw_dir, workdir, keep_scaffolds):  # unannotated: list[Path] need
                     dropped += 1
                     continue
                 kept += 1
-                # column 4 carries the replicate tag; bedtools merge -o distinct on it
-                # is what yields the per-region replicate support count.
+                # Column 4 holds the replicate label, so that bedtools merge -o distinct
+                # reports the replicates supporting each merged region.
                 fout.write("\t".join([chrom, c[1], c[2], rep, c[4], c[5]]) + "\n")
         with open(dst, "w") as fout:
             subprocess.run(["sort", "-k1,1", "-k2,2n", str(unsorted)], stdout=fout, check=True)
@@ -115,8 +121,7 @@ def main():
             rows.append((chrom, anchor, strand, n))
 
     rows.sort(key=lambda r: (r[0], r[1]))
-    # Collapsing to midpoints can make two nearby merged regions land on the same
-    # anchor; keep one row per (chrom, anchor, strand) so loci stay unique.
+    # Retain one record per (chromosome, anchor, strand).
     seen = set()
     final = []
     for chrom, anchor, strand, n in rows:

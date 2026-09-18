@@ -1,163 +1,149 @@
 # RBPeek
 
-RBPeek quantifies the co-occupancy of RNA-binding proteins at a defined set of genomic loci. Given
-an **inference BED** (here, reproducible THRAP3 binding sites) and a panel of CLIP peak files, it
-ranks the panel samples by their depth-normalised binding at those loci and plots the binding
-profiles of the highest-ranked samples.
+RBPeek quantifies the co-occupancy of RNA-binding proteins (RBPs) at a defined set of genomic
+loci. Given an **inference BED** (here, reproducible THRAP3 binding sites) and a panel of CLIP
+peak files, it ranks the panel samples by their depth-normalised binding at those loci and
+plots the binding profiles of the highest-ranked samples.
 
-## Quick start (THRAP3)
+## Requirements
 
-Partition the anchors into exonic and intronic sets and generate the normalisation regions (run
-once):
+`intersect_inference_bed.py` requires Python ≥ 3.9, `bedtools`, `numpy`, `scipy`, `matplotlib`,
+`seaborn` and `scikit-learn`; `rbpeek.yml` defines a conda environment that provides them. The
+other scripts require only Python ≥ 3.6 and `bedtools`.
 
-```bash
-python3 scripts/split_inference_bed_by_region.py -b THRAP3/THRAP3_merged_min2rep_anchors.bed -o THRAP3 --drop-chrM
-```
+## Usage
 
-Run each region; results are written to `results/thrap3_<region>/`:
+1. Partition the inference loci into exonic and intronic sets and generate the normalisation
+   regions:
 
-```bash
-sbatch --job-name=thrap3_exonic scripts/run_thrap3_region.sbatch exonic
-```
+   ```bash
+   python3 scripts/split_inference_bed_by_region.py -b THRAP3/THRAP3_merged_min2rep_anchors.bed -g <annotation.gtf> -o THRAP3 --drop-chrM
+   ```
 
-```bash
-sbatch --job-name=thrap3_intronic scripts/run_thrap3_region.sbatch intronic
-```
+2. Run the analysis for one region:
 
-`intersect_inference_bed.py` requires the `rbpeek` conda environment (`rbpeek.yml`, Python 3.12)
-and `bedtools`. The split and build scripts are also compatible with Python 3.6.
+   ```bash
+   python3 scripts/intersect_inference_bed.py \
+     -x <panel directory> \
+     -s THRAP3/RBPeekSamplesheet_eCLIP.tsv \
+     -b THRAP3/THRAP3_merged_min2rep_anchors_exonic.bed \
+     --norm-bed THRAP3/regions_exonic.bed \
+     --genome <chromosome sizes> \
+     -o results/thrap3_exonic \
+     --support-pct 20 --tsne
+   ```
+
+   `scripts/run_thrap3_region.sbatch <exonic|intronic>` runs this step under SLURM with the
+   settings used for the THRAP3 analysis.
+
+## Options
+
+| option | default | description |
+|---|---|---|
+| `-x/--xldir` | required | directory against which the samplesheet's `file` paths are resolved |
+| `-s/--samplesheet` | required | TSV with columns `file` and `group` (sample label) |
+| `-b/--bed` | required | inference BED6+, strand in column 6; each locus is anchored at `(start + end) // 2` |
+| `--norm-bed` | required | BED6 of the regions over which each sample's normalising cDNA is summed (`regions_exonic.bed` for exonic loci, `regions_intronic.bed` for intronic loci) |
+| `--genome` | required | chromosome sizes file for `bedtools slop` |
+| `-o/--outdir` | `results` | output directory |
+| `--window` | 100 | half-width (nt) of the window around each locus |
+| `--central-window` | 10 | half-width (nt) of the central window used for ranking |
+| `--support-pct` | 30 | percentage of top-ranked samples shown in the heatmap and tSNE |
+| `--gaussian-sigma` | 2 | standard deviation (nt) of the Gaussian kernel used to smooth the plotted metaprofile |
+| `--heatmap-scale-percentile` | 99 | percentile of non-zero heatmap values mapped to the top of the colour scale |
+| `--tsne`, `--tsne-perplexity` | off, 30 | tSNE embedding of the heatmap loci |
+
+Chromosome naming (`chr1` or `1`) is harmonised automatically between the inference BED and
+the panel files.
+
+## Method
+
+1. **Signal.** Each locus is extended by `--window` nt on either side and intersected with each
+   panel file on the same strand. The cDNA count of a peak (BED score) is distributed uniformly
+   across its width, so a peak that partly overlaps a window contributes only the overlapping
+   fraction, and a 1 nt crosslink site retains its full score at its own position. Offsets are
+   strand-aligned, with positive values downstream of the locus. This yields, for each sample,
+   a locus × offset support matrix *c*(*l*, *o*).
+2. **Normalisation.** `region_cdna` is the cDNA of the sample's peaks within `--norm-bed` on
+   the same strand. Each peak is weighted by the fraction of its width inside the regions,
+   overlapping regions are merged beforehand, and mitochondrial peaks are excluded because
+   mitochondrial rRNA is a major source of background in eCLIP libraries. Normalised support
+   is *x*(*l*, *o*) = *c*(*l*, *o*) × 10⁶ / `region_cdna`.
+3. **Metaprofile.** For each sample, *m*(*o*) is the mean over all loci of
+   log(1 + *x*(*l*, *o*)). The logarithm is applied per locus before averaging, so that the
+   curve reflects the breadth of binding across loci and is not dominated by a small number of
+   strongly bound loci. Loci without signal contribute 0.
+4. **Ranking.** `central_binding` is the area under *m*(*o*) within ±`--central-window` nt.
+   Samples are ranked by `central_binding`, and the top `--support-pct` percent are selected.
+   Because the ranking score and the plotted curve are the same statistic, curve height reflects
+   rank. Samples without region cDNA, or without a peak in the central window of any locus, are
+   not selected.
+5. **Figures.**
+   - `metaprofile.pdf` shows *m*(*o*) for the ten highest-ranked samples, smoothed with a
+     Gaussian kernel (the ranking uses the unsmoothed curve). Red dotted lines mark the central
+     window, and the legend gives the rank and `central_binding` of each sample.
+   - `binf_support_heatmap.pdf` shows loci × selected samples. Each cell is the strongest single
+     peak of the sample within the central window of the locus (the cDNA of that peak inside the
+     window, per million region cDNA), log(1 + *x*)-transformed and scaled to the
+     `--heatmap-scale-percentile` of the non-zero cells. Samples are ordered by hierarchical
+     clustering (cosine distance, average linkage) and labelled with their rank; loci are
+     ordered by summed cell value, and loci without a central peak in any selected sample are
+     omitted.
+   - `binf_summary_tsne.png` is a tSNE embedding of the heatmap loci (fixed random seed).
+
+The width of the central peak in the metaprofile is determined by the panel peak calls and
+should not be interpreted as a binding footprint: the panel peaks are approximately 11 nt wide,
+and the cDNA of each peak is distributed uniformly across its width.
 
 ## Outputs
 
 | file | contents |
 |---|---|
-| `sample_summary.tsv` | one row per panel sample, sorted by rank ([columns](#sample_summarytsv)) |
-| `metaprofile.pdf` | mean `log1p` depth-normalised support at each offset across ±`--window`, for the 10 highest-ranked selected samples; the ranking score is this curve's area inside ±central-window |
-| `metaprofile_matrix.npz` | raw per-locus, per-offset support of every sample (`--save-matrix`), for `explore_metaprofile.py` |
-| `binf_support_heatmap.pdf` | loci × selected samples; each cell is the strongest central peak. The title gives the BED name, the selection and the locus count |
+| `metaprofile.pdf` | *m*(*o*) of the ten highest-ranked selected samples |
+| `sample_summary.tsv` | one row per panel sample, sorted by rank |
+| `binf_support_heatmap.pdf` | loci × selected samples |
 | `binf_summary_tsne.png` | tSNE embedding of the heatmap loci (`--tsne`) |
-| `binf_heatmap_clusters.tsv`, `metaprofile_cluster_C*.pdf` | k-means clusters of the heatmap loci and one metaprofile per cluster (`-n`) |
 
-## Inputs and options
+Columns of `sample_summary.tsv`:
 
-| flag | default | meaning |
-|---|---|---|
-| `-x/--xldir` | required | root directory against which the samplesheet's `file` paths are resolved |
-| `-s/--samplesheet` | required | TSV with columns `file` and `group` (sample label); the THRAP3 runs use `THRAP3/RBPeekSamplesheet_eCLIP.tsv` |
-| `-b/--bed` | required | inference BED6+, strand in column 6; each locus is anchored at `(start+end)//2` |
-| `--norm-bed` | required | regions over which each sample's normalising cDNA is summed; use the `regions_<region>.bed` matching the loci |
-| `--genome` | HPC hg38 | chromosome sizes for `bedtools slop` |
-| `-o/--outdir` | `results` | output directory |
-| `--window` | 100 | half-window (nt) around each locus |
-| `--central-window` | 10 | half-width (nt) of the window whose area under the curve is the ranking score |
-| `--support-pct` | 30 | percentage of top-ranked samples passed to the heatmap, tSNE and clustering (the THRAP3 runner uses 20) |
-| `--gaussian-sigma` | 2 | standard deviation (nt) of the metaprofile smoothing kernel (display only) |
-| `--heatmap-scale-percentile` | 99 | percentile of non-zero cells mapped to the top of the colour scale |
-| `--save-matrix` | off | write every sample's raw counts to `metaprofile_matrix.npz` |
-| `-n/--n-clusters` | off | number of k-means clusters of the heatmap loci (presence/absence) |
-| `--tsne`, `--tsne-perplexity` | off, 30 | tSNE of the heatmap loci |
-
-Chromosome naming (`chr1` vs `1`) is harmonised automatically between the inference BED and the
-panel files.
-
-## Method
-
-1. **Signal vectors.** Each locus is extended to ±`--window` and intersected, strand-aware, with
-   each panel file. The cDNA count of a peak (Clippy score) is distributed uniformly across its
-   width, so a peak that partly overlaps a window contributes only the overlapping fraction: an
-   11 nt peak centred at +12 contributes 4/11 of its cDNA to offsets +7 to +10. A 1 nt crosslink
-   site retains its full score at its own position. Offsets are strand-aligned, with positive
-   values downstream of the locus.
-2. **Normalisation.**
-   - `region_cdna`: the sample's peak cDNA within `--norm-bed` (strand-aware, chrM excluded).
-     Each peak is weighted by the fraction of its width inside the regions, which are merged
-     beforehand.
-   - `locus_cdna`: the sample's cDNA within any locus window, with each distinct peak counted
-     once.
-   - `proportional_binding` = `locus_cdna / region_cdna`.
-3. **Ranking.** Each sample has a curve `m(o)`: at every offset `o`, the mean over **all** loci of
-   `log1p(support × 10⁶ / region_cdna)`, every peak included. `central_binding` is the area
-   under that curve within ±central-window, and samples are ranked by it. The score and the
-   metaprofile are therefore the same statistic, so curve height follows rank.
-   - Restricting the area to the central window limits the score to binding at the locus itself.
-   - Division by `region_cdna` normalises for sequencing depth.
-   - `log1p` per locus makes breadth count: a locus with 5,000 reads weighs about 5× one with
-     5 reads, not 1,000×. Without it a few loci decide the rank (one intronic sample took 51%
-     of its central signal from 1% of its loci).
-   - Averaging over all loci assigns unbound loci a value of 0, which penalises sparse samples.
-
-   Samples with no region cDNA, or with no peak inside the central window of any locus, are
-   excluded from selection.
-4. **Figures.**
-   - The metaprofile plots `m(o)` across ±`--window`, smoothed with a Gaussian kernel (the score
-     uses the unsmoothed curve). On the THRAP3 data this puts the peak heights of the top 10 in
-     exact rank order in both regions (0 of 45 pairs out of order); scoring the `log1p` of each
-     locus's ±10 sum left 10 / 8 pairs out of order against the same plot, and any mean without
-     `log1p` 18. Red dotted lines mark ±central-window, the legend gives each sample's rank and
-     score, and the title names the inference BED. The plot area is square with 12 pt text.
-   - Peak width is set by the method, not by the proteins: Clippy calls peaks on a 10 nt rolling
-     mean, so panel peaks are about 11 nt wide, and each peak's cDNA is spread evenly across it.
-     Every sample's central peak is therefore 10–13 nt wide at half maximum, with a dip on each
-     side where no second peak can be called.
-   - `--save-matrix` stores every sample's raw counts (no normalisation, no log) as sparse
-     triplets. `scripts/explore_metaprofile.py` re-ranks and redraws from that file alone, e.g.
-     `--curve {log,linear,windowlog,windowlinear} --rank-by {area,height0,file}
-     [--subtract-flank]`, and reports how well peak height follows the chosen ranking.
-   - Heatmap values are scaled by 10⁶ / `region_cdna`.
-   - Each heatmap cell is the sample's **strongest central peak** at that locus: the cDNA inside
-     ±central-window of the peak contributing the most cDNA there. The ranking, in contrast,
-     sums all peaks.
-   - The heatmap is `log1p`-transformed and scaled to the `--heatmap-scale-percentile` of
-     non-zero cells. Loci without a central peak from any selected sample are omitted.
-   - Heatmap rows are ordered by hierarchical clustering of samples (cosine distance, average
-     linkage); the bracketed number is the sample's rank. Loci are ordered by summed cell value,
-     or by cluster when `-n` is given.
-   - PDFs embed TrueType fonts, and the heatmap cells are rasterised at 200 dpi. k-means and
-     tSNE use a fixed random seed.
-
-### `sample_summary.tsv`
-
-| column | meaning |
+| column | description |
 |---|---|
+| `sample` | sample label from the samplesheet |
 | `rank`, `selected` | rank by `central_binding`; whether the sample was selected |
-| `central_binding` | the ranking score: area under the sample's mean-`log1p` curve within ±central-window (Method 3) |
-| `proportional_binding`, `locus_cdna`, `region_cdna` | see Method 2 |
-| `total_peak_support`, `mean_peak_support` | support summed over every locus window (a peak near two loci is counted in both), and that sum divided by the number of loci |
-| `loci_with_signal`, `frac_loci_with_signal` | loci with any support within ±`--window` |
-| `mean_binding_offset`, `mean_variance`, `mean_pearson_skew`, `mean_kurtosis` | means over loci with signal; the offset is the centre of the strongest 5 nt window, and the variance is on the normalised scale |
+| `central_binding` | area under *m*(*o*) within the central window |
+| `region_cdna` | normalising cDNA (Method 2) |
+| `locus_cdna`, `proportional_binding` | cDNA of the distinct peaks within any locus window, each weighted by the fraction of its width inside; and its ratio to `region_cdna` |
+| `total_peak_support`, `mean_peak_support` | support summed over all locus windows (a peak within the windows of two loci is counted in both), and that sum divided by the number of loci |
+| `loci_with_signal`, `frac_loci_with_signal` | number and fraction of loci with any support within the window |
+| `mean_binding_offset` | mean, over loci with signal, of the centre of the 5 nt window with the highest support |
+| `mean_variance`, `mean_pearson_skew`, `mean_kurtosis` | means, over loci with signal, of the variance (normalised scale), Pearson median skewness and excess kurtosis of the support vector |
 
-## THRAP3 inference loci
+## THRAP3 data
 
-The inference loci derive from four HEK293 HA-THRAP3 iCLIP replicates (Flow project
-`788995297969977723`, CLIP-Seq v1.7, GRCh38), stored in `THRAP3/raw/`.
-`build_thrap3_inference_bed.py`:
-- converts chromosome names to UCSC style
-- merges overlapping peaks across replicates, strand-aware
-- retains regions supported by at least 2 of the 4 replicates
-- reduces each region to its 1 nt midpoint
+The inference loci derive from four HEK293 HA-THRAP3 iCLIP replicates (GRCh38), whose Clippy
+peak calls are stored in `THRAP3/raw/`. `build_thrap3_inference_bed.py` converts chromosome
+names to UCSC style, merges overlapping peaks across replicates on each strand, retains regions
+supported by at least two of the four replicates, and reduces each region to its 1 nt midpoint.
+This yields 29,018 loci (`THRAP3_merged_min2rep_anchors.bed`; the score column records
+replicate support). After removal of mitochondrial loci, 19,917 loci are exonic and 8,666 are
+intronic.
 
-This yields 29,018 loci in `THRAP3_merged_min2rep_anchors.bed`, with the score column recording
-replicate support. With `--drop-chrM`, the split assigns 19,917 loci to exons and 8,666 to
-introns.
+The panel (`THRAP3/RBPeekSamplesheet_eCLIP.tsv`) comprises 224 HepG2 and K562 eCLIP samples;
+`RBPeekSamplesheet.tsv` additionally lists the iCLIP and PAR-CLIP samples. Panel entries under
+`peaks/merged/` were produced with `merge_replicate_peaks.py`.
 
-**Limitations.** The panel consists of HepG2 and K562 eCLIP data, whereas THRAP3 was profiled in
-HEK293, so cell line is confounded with RBP identity; ranks should be compared, not absolute
-values. The eCLIP samplesheet excludes `HNRNPC-Hela-iCLIP`, the only assay-matched sample;
-`RBPeekSamplesheet.tsv` lists all 299 samples.
+**Limitations.** THRAP3 was profiled in HEK293 cells, whereas the panel consists of HepG2 and
+K562 data, so cell line is confounded with RBP identity; ranks should be compared, not
+absolute values. `central_binding` increases with the fraction of loci at which a sample has
+signal, and the number of peaks called depends on library depth, so normalisation by
+`region_cdna` does not remove the influence of depth entirely.
 
 ## Scripts
 
 | script | purpose |
 |---|---|
 | `intersect_inference_bed.py` | the analysis described above |
-| `split_inference_bed_by_region.py` | exonic/intronic partition of the loci (strand-aware, exon priority) and the normalisation region BEDs; `--drop-chrM` removes mitochondrial loci |
-| `run_thrap3_region.sbatch` | runs the analysis for one region |
-| `build_thrap3_inference_bed.py` | THRAP3 replicate peaks → inference BED |
-| `merge_replicate_peaks.py` | pools replicate peak BEDs by summing scores at identical intervals (used for the `peaks/merged/` panel entries) |
-| `build_gene_matrix_from_summaries.py` | Flow `*.summary_gene.tsv` files → gene × sample count and RPKM matrices |
-| `explore_metaprofile.py` | re-rank and redraw metaprofiles from `metaprofile_matrix.npz` without rerunning the analysis |
-| `plot_expression_heatmap.py` | clustered expression heatmap for a gene list (`.xlsx` or text); plots the 100 most variable matched genes by default |
-
-`Centrosome/` and `decoys/` contain data from earlier analyses and are not used by the THRAP3
-workflow. The Centrosome gene-expression heatmap is generated with the last two scripts from the
-files in `Centrosome/gene_counts/`.
+| `split_inference_bed_by_region.py` | exonic and intronic locus sets (strand-aware, exons given priority) and the corresponding normalisation regions; `--drop-chrM` removes mitochondrial loci |
+| `build_thrap3_inference_bed.py` | replicate THRAP3 peak calls → inference BED |
+| `merge_replicate_peaks.py` | pools replicate peak BEDs by summing scores at identical intervals |
+| `run_thrap3_region.sbatch` | SLURM job for one region of the THRAP3 analysis |
