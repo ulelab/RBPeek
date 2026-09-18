@@ -32,7 +32,7 @@ and `bedtools`. The split and build scripts are also compatible with Python 3.6.
 | file | contents |
 |---|---|
 | `sample_summary.tsv` | one row per panel sample, sorted by rank ([columns](#sample_summarytsv)) |
-| `metaprofile_percent.pdf`, `metaprofile_rankscaled.pdf`, `metaprofile_flank.pdf`, `metaprofile_logmean.pdf` | support as a function of offset across ±`--window` for the 10 highest-ranked selected samples, under four normalisations (Method 4) |
+| `metaprofile.pdf` | mean log-transformed, depth-normalised support as a function of offset across ±`--window`, for the 10 highest-ranked selected samples |
 | `binf_support_heatmap.pdf` | loci × selected samples; each cell is the strongest central peak. The title gives the BED name, the selection and the locus count |
 | `binf_summary_tsne.png` | tSNE embedding of the heatmap loci (`--tsne`) |
 | `binf_heatmap_clusters.tsv`, `metaprofile_cluster_C*.pdf` | k-means clusters of the heatmap loci and one metaprofile per cluster (`-n`) |
@@ -86,23 +86,13 @@ panel files.
    Samples with no region cDNA, or with no peak inside the central window of any locus, are
    excluded from selection.
 4. **Figures.**
-   - The metaprofile is drawn under four normalisations, because a linear mean over loci is set
-     by a few very strongly bound loci whereas the ranking (a mean of logs) rewards breadth, so
-     curve height in the linear version need not follow rank. With `P(o)` the mean raw support
-     over all loci at offset `o`, every peak included:
-     - **percent**: `P(o) / region_cdna × 100`. The depth-normalised linear mean; the right axis
-       is the left axis multiplied by the number of loci.
-     - **rankscaled**: `P(o)` rescaled so its area over the whole window equals
-       `central_binding`. Areas follow the ranking exactly; peak height additionally depends on
-       the fraction of the sample's signal that is central.
-     - **flank**: `P(o)` divided by its mean at offsets beyond ±central-window, i.e. fold over
-       local background. Independent of depth; unstable for samples with almost no flank signal.
-     - **logmean**: the mean over loci of `log1p(support × 10⁶ / region_cdna)` at each offset,
-       which applies the ranking's transformation per offset.
-
-     All are smoothed with a Gaussian kernel last. Red dotted lines mark ±central-window, the
-     legend gives each sample's rank and score, and the title names the inference BED (and
-     therefore the region) and the normalisation. Per-cluster metaprofiles (`-n`) use **percent**.
+   - The metaprofile shows, at each offset across ±`--window`, the mean over all loci of
+     `log1p(support × 10⁶ / region_cdna)`, every peak included, smoothed with a Gaussian kernel.
+     This applies the ranking's transformation per offset, so curve height follows rank. A
+     linear mean of normalised support does not, because a few very strongly bound loci set
+     its height, whereas the ranking rewards binding many loci. Red dotted lines mark
+     ±central-window, the legend gives each sample's rank and score, and the title names the
+     inference BED (and therefore the region). The plot area is square with 12 pt text.
    - Heatmap values are scaled by 10⁶ / `region_cdna`.
    - Each heatmap cell is the sample's **strongest central peak** at that locus: the cDNA inside
      ±central-window of the peak contributing the most cDNA there. The ranking, in contrast,

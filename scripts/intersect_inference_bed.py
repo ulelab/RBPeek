@@ -11,7 +11,7 @@ Workflow
      peak counts by the fraction of its width inside.
   3. Rank samples by central binding - mean over all loci of log1p(support within
      +/---central-window nt, per M region cDNA) - and keep the top --support-pct percent.
-  4. Plot four normalisations of the metaprofile (first 10 of those), write
+  4. Plot the metaprofile (first 10 of those; mean log1p support per offset), write
      sample_summary.tsv, then plot the heatmap and optional tSNE over the kept samples. Heatmap cells show only each locus's
      strongest central peak; the ranking and the metaprofile count every peak.
 
@@ -525,121 +525,72 @@ def percentile_scale(matrix: np.ndarray, pct: float) -> np.ndarray:
     return np.clip(dense / hi, 0.0, 1.0)
 
 
-def render_metaprofile(offsets, profiles, order, legend, n_loci, window, out_path, title, central_window,
-                       ylabel, right_label=None, hline=None) -> None:
+METAPROFILE_YLABEL = "Mean log1p support per locus\n(per M region cDNA, smoothed)"
+
+
+def log_mean_profile(counts, scale, sigma):
     """
-    One metaprofile panel. With right_label, a right axis shows the same curves times n_loci -
-    one constant, so both axes describe the same pixels; that only means something when the
-    left axis is a per-locus mean. hline draws a grey dashed reference line at that y value.
+    The metaprofile curve: at each offset, the mean over loci of log1p(support per M region
+    cDNA), then Gaussian-smoothed. This applies the ranking's own transformation per offset,
+    so curve height follows rank. A plain mean of normalised support does not: a few very
+    strongly bound loci set its height, whereas the ranking rewards binding many loci.
     """
-    fig_h = max(9.6, 0.30 * len(order) + 2.2)
-    fig, ax = plt.subplots(figsize=(13.5, fig_h))
-    # 10 colours, then change linestyle when they wrap: a second non-colour channel stays
-    # readable under colour-vision deficiency, which a 20-hue palette does not.
-    palette = plt.rcParams["axes.prop_cycle"].by_key()["color"]
-    linestyles = ["-", "--", ":", "-."]
-    for i, pn in enumerate(order):
-        ax.plot(
-            offsets,
-            profiles[pn],
-            label=f"{pn}  ({legend[pn]})",
-            color=palette[i % len(palette)],
-            linestyle=linestyles[(i // len(palette)) % len(linestyles)],
-            linewidth=2,
-        )
-    ax.axvline(0, color="black", linewidth=1, alpha=0.4)
-    # Mark the +/-central-window that the ranking score counts.
-    for edge in (-central_window, central_window):
-        ax.axvline(edge, color="red", linestyle=":", linewidth=1.2)
-    ax.set_xlabel("Relative nucleotide position around inference loci (nt)")
-    ax.set_ylabel(ylabel)
-    if hline is not None:
-        ax.axhline(hline, color="grey", linestyle="--", linewidth=1)
-    ax.set_xlim(-window, window)
-    ax.set_title(title, loc="left", fontsize=10)
-
-    if right_label:
-        ax2 = ax.twinx()
-        lo, hi = ax.get_ylim()
-        ax2.set_ylim(lo * n_loci, hi * n_loci)
-        ax2.set_ylabel(right_label)
-
-    # Figure-fraction layout: an axes-relative legend is blind to how wide ax2's tick labels
-    # turn out, and wide ones pushed the y-label under the legend text.
-    fig.subplots_adjust(left=0.06, right=0.50, top=1.0 - 0.5 / fig_h, bottom=0.72 / fig_h)
-    fig.legend(*ax.get_legend_handles_labels(), frameon=False, loc="center left",
-               bbox_to_anchor=(0.60, 0.5), bbox_transform=fig.transFigure, borderaxespad=0.0)
-    fig.savefig(out_path, dpi=200)
-    plt.close(fig)
+    return smooth_metaprofile_gaussian(np.log1p(counts.astype(np.float64) * scale).mean(axis=0), sigma)
 
 
-def metaprofile_variants(raw_prof, log_prof, stats, order, offsets, central_window, sigma, n_loci):
-    """
-    Four normalisations of the same metaprofile, as {name: (curves, ylabel, right_label, hline)}.
-    raw_prof[s] is the mean over loci of raw support at each offset; log_prof[s] the mean over
-    loci of log1p(support per M region cDNA). Smoothing is applied last.
-
-      percent     raw / region cDNA x 100. The linear mean, so a few very strong loci set the
-                  height; this is the baseline.
-      rankscaled  raw rescaled so its area over the whole window equals the central binding
-                  score. Areas follow the ranking exactly; peak height also depends on how
-                  much of the sample's signal is central.
-      flank       raw divided by its own mean beyond +/-central-window: fold over background,
-                  independent of depth and of region cDNA.
-      logmean     the ranking's own maths applied per offset.
-    """
-    flank = np.abs(offsets) > central_window
-    out = {name: {} for name in ("percent", "rankscaled", "flank", "logmean")}
-    for pn in order:
-        raw, st = raw_prof[pn], stats[pn]
-        zero = np.zeros_like(raw)
-        out["percent"][pn] = raw * st["scale"] / PER_MILLION * 100.0
-        area = float(raw.sum())
-        out["rankscaled"][pn] = raw * st["central"] / area if area > 0 else zero
-        bg = float(raw[flank].mean()) if flank.any() else 0.0
-        if bg <= 0:
-            print(f"Note: {pn} has no support beyond +/-{central_window} nt; its fold-over-flank curve is drawn as zero")
-        out["flank"][pn] = raw / bg if bg > 0 else zero
-        out["logmean"][pn] = log_prof[pn]
-    smooth = lambda d: {pn: smooth_metaprofile_gaussian(v, sigma) for pn, v in d.items()}
-    return {
-        "percent": (smooth(out["percent"]), "Mean support per locus (% of region cDNA, smoothed)",
-                    f"Summed over {n_loci:,} loci (% of region cDNA)", None),
-        "rankscaled": (smooth(out["rankscaled"]),
-                       "Support, scaled so the whole-window area equals the central binding score (smoothed)", None, None),
-        "flank": (smooth(out["flank"]), f"Fold over flank mean (offsets beyond ±{central_window} nt, smoothed)", None, 1.0),
-        "logmean": (smooth(out["logmean"]), "Mean log1p support per locus (per M region cDNA, smoothed)", None, None),
-    }
+def render_metaprofile(offsets, profiles, order, legend, window, out_path, title, central_window) -> None:
+    """One metaprofile panel: square plot area, 12 pt text, legend to the right."""
+    with plt.rc_context({"font.size": 12, "axes.titlesize": 12, "axes.labelsize": 12,
+                         "xtick.labelsize": 12, "ytick.labelsize": 12, "legend.fontsize": 12}):
+        fig = plt.figure(figsize=(15.0, 8.6))
+        # A 7 x 7 in plot area: [left, bottom, width, height] in figure fractions.
+        ax = fig.add_axes([1.2 / 15.0, 0.9 / 8.6, 7.0 / 15.0, 7.0 / 8.6])
+        ax.set_box_aspect(1)
+        # 10 colours, then change linestyle when they wrap: a second non-colour channel stays
+        # readable under colour-vision deficiency, which a 20-hue palette does not.
+        palette = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+        linestyles = ["-", "--", ":", "-."]
+        for i, pn in enumerate(order):
+            ax.plot(offsets, profiles[pn], label=f"{pn}  ({legend[pn]})",
+                    color=palette[i % len(palette)],
+                    linestyle=linestyles[(i // len(palette)) % len(linestyles)], linewidth=2)
+        ax.axvline(0, color="black", linewidth=1, alpha=0.4)
+        # Mark the +/-central-window that the ranking score counts.
+        for edge in (-central_window, central_window):
+            ax.axvline(edge, color="red", linestyle=":", linewidth=1.2)
+        ax.set_xlabel("Relative nucleotide position around inference loci (nt)")
+        ax.set_ylabel(METAPROFILE_YLABEL)
+        ax.set_xlim(-window, window)
+        # Left-aligned and allowed to run over the legend column: at 12 pt the title is wider
+        # than the square plot area.
+        ax.set_title(title, loc="left")
+        fig.legend(*ax.get_legend_handles_labels(), frameon=False, loc="center left",
+                   bbox_to_anchor=(8.6 / 15.0, 0.5), bbox_transform=fig.transFigure, borderaxespad=0.0)
+        fig.savefig(out_path, dpi=200)
+        plt.close(fig)
 
 
-def plot_cluster_metaprofiles(protein_sources, order, scale, cluster_ids, labels, windows_bed,
+def plot_cluster_metaprofiles(protein_sources, order, scale, legend, cluster_ids, labels, windows_bed,
                               binf_index, window, n_binf, sigma, outdir, central_window, region) -> None:
-    """One metaprofile per k-means cluster (the percent normalisation), same samples as the global one."""
+    """One metaprofile per k-means cluster, over the same samples as the global one."""
     offsets = np.arange(-window, window + 1, dtype=np.int64)
     masks = {cid: labels == cid for cid in cluster_ids}
     profiles: dict[int, dict[str, np.ndarray]] = {cid: {} for cid in cluster_ids}
-    shares: dict[int, dict[str, str]] = {cid: {} for cid in cluster_ids}
     wanted = set(order)
     for pn, path in protein_sources:
         if pn not in wanted:
             continue
         counts, _, _ = compute_counts_for_protein(path, windows_bed, binf_index, window, n_binf)
         for cid in cluster_ids:
-            m = masks[cid]
-            if not m.any():
-                continue
-            profiles[cid][pn] = smooth_metaprofile_gaussian(counts[m].mean(axis=0), sigma) * scale[pn] / PER_MILLION * 100.0
-            shares[cid][pn] = f"{float(counts[m].sum()) * scale[pn] / PER_MILLION:.2%} of region cDNA"
+            if masks[cid].any():
+                profiles[cid][pn] = log_mean_profile(counts[masks[cid]], scale[pn], sigma)
     for cid in cluster_ids:
         if not profiles[cid]:
             continue
         n = int(masks[cid].sum())
         out = outdir / f"metaprofile_cluster_C{cid}.pdf"
-        render_metaprofile(offsets, profiles[cid], [pn for pn in order if pn in profiles[cid]],
-                           shares[cid], n, window, out,
-                           f"{region}: cluster C{cid} metaprofile   |   n = {n:,} loci", central_window,
-                           "Mean support per locus (% of region cDNA, smoothed)",
-                           right_label=f"Summed over {n:,} loci (% of region cDNA)")
+        render_metaprofile(offsets, profiles[cid], [pn for pn in order if pn in profiles[cid]], legend,
+                           window, out, f"{region}\ncluster C{cid}   |   n = {n:,} loci", central_window)
         print(f"Wrote cluster metaprofile plot to: {out}")
 
 
@@ -737,8 +688,7 @@ def main():
 
         # ---- 1. per-sample counts, statistics and normalisation ----
         best_by: dict[str, np.ndarray] = {}
-        raw_prof: dict[str, np.ndarray] = {}
-        log_prof: dict[str, np.ndarray] = {}
+        profiles: dict[str, np.ndarray] = {}
         stats: dict[str, dict] = {}
         for pn, path in protein_sources:
             counts, locus_cdna, central_max = compute_counts_for_protein(
@@ -748,8 +698,7 @@ def main():
             scale = PER_MILLION / reg if reg > 0 else 0.0
             has = totals > 0
             best_by[pn] = central_max
-            raw_prof[pn] = counts.mean(axis=0, dtype=np.float64)
-            log_prof[pn] = np.log1p(counts.astype(np.float64) * scale).mean(axis=0)
+            profiles[pn] = log_mean_profile(counts, scale, args.gaussian_sigma)
             stats[pn] = {
                 "locus_cdna": locus_cdna,
                 "region_cdna": reg,
@@ -804,22 +753,15 @@ def main():
 
         # ---- 3. metaprofile ----
         meta_set = selected[:METAPROFILE_MAX]
-        # Four normalisations of the same curves, from one pass over the data, so they can be
-        # compared directly. Curve height in the linear versions need not follow the ranking: the
-        # ranking averages a log per locus and so rewards breadth, while a linear mean is set
-        # by a few very strong loci.
         legend = {pn: f"rank {rank[pn]}, central binding {stats[pn]['central']:.3f}" for pn in meta_set}
-        variants = metaprofile_variants(raw_prof, log_prof, stats, meta_set, offsets, args.central_window,
-                                        args.gaussian_sigma, n_binf)
-        for name, (curves, ylabel, right_label, hline) in variants.items():
-            meta_path = outdir / f"metaprofile_{name}.pdf"
-            render_metaprofile(
-                offsets, curves, meta_set, legend, n_binf, args.window, meta_path,
-                f"{binf_path.stem}: top {len(meta_set)} of {len(ranked)} samples by central binding "
-                f"(±{args.central_window} nt, red dotted lines)   |   n = {n_binf:,} loci   |   {name}",
-                args.central_window, ylabel, right_label=right_label, hline=hline,
-            )
-            print(f"Wrote metaprofile plot to: {meta_path}")
+        meta_path = outdir / "metaprofile.pdf"
+        render_metaprofile(
+            offsets, profiles, meta_set, legend, args.window, meta_path,
+            f"{binf_path.stem}\ntop {len(meta_set)} of {len(ranked)} samples by central binding "
+            f"(±{args.central_window} nt, red dotted lines)   |   n = {n_binf:,} loci",
+            args.central_window,
+        )
+        print(f"Wrote metaprofile plot to: {meta_path}")
 
         # ---- 4. the one combined table ----
         table_path = outdir / "sample_summary.tsv"
@@ -956,7 +898,7 @@ def main():
                                           str(int(labels_all[i])) if keep[i] else "NA"]) + "\n")
             print(f"Wrote heatmap cluster assignments to: {cluster_tsv}")
             plot_cluster_metaprofiles(
-                protein_sources, meta_set, {pn: stats[pn]["scale"] for pn in meta_set}, cluster_ids,
+                protein_sources, meta_set, {pn: stats[pn]["scale"] for pn in meta_set}, legend, cluster_ids,
                 labels_all, windows_bed, binf_index, args.window, n_binf, args.gaussian_sigma, outdir,
                 args.central_window, binf_path.stem,
             )
