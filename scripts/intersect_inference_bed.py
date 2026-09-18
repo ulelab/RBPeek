@@ -44,6 +44,19 @@ from scipy.spatial.distance import pdist
 RANDOM_STATE = 42
 # Maximum number of curves drawn in the metaprofile.
 METAPROFILE_MAX = 10
+# Line colours of the metaprofile, assigned in rank order.
+METAPROFILE_COLOURS = [
+    "#393b79",  # dark blue
+    "#637939",  # dark green
+    "#e7ba52",  # gold
+    "#d6616b",  # dark pink
+    "#a55194",  # purple
+    "#6b6ecf",  # medium blue
+    "#b5cf6b",  # medium green
+    "#8c6d31",  # brown
+    "#e7969c",  # light pink
+    "#de9ed6",  # light purple
+]
 # Mitochondrial contig names. Mitochondrial peaks are excluded from region_cdna because
 # mitochondrial rRNA is a major source of background in eCLIP libraries.
 CHRM = {"chrM", "chrMT", "MT", "M"}
@@ -461,8 +474,8 @@ def render_metaprofile(offsets, profiles, order, legend, window, out_path, title
         # Plot area of 7 x 7 in, given as [left, bottom, width, height] in figure fractions.
         ax = fig.add_axes([1.2 / 15.0, 0.9 / 8.6, 7.0 / 15.0, 7.0 / 8.6])
         ax.set_box_aspect(1)
-        # The colour cycle has 10 entries; the line style changes each time it repeats.
-        palette = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+        # The line style changes each time the colour list repeats.
+        palette = METAPROFILE_COLOURS
         linestyles = ["-", "--", ":", "-."]
         for i, pn in enumerate(order):
             ax.plot(offsets, profiles[pn], label=f"{pn}  ({legend[pn]})",
