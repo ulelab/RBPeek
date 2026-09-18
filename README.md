@@ -32,7 +32,7 @@ and `bedtools`. The split and build scripts are also compatible with Python 3.6.
 | file | contents |
 |---|---|
 | `sample_summary.tsv` | one row per panel sample, sorted by rank ([columns](#sample_summarytsv)) |
-| `metaprofile.pdf` | mean log-transformed, depth-normalised support as a function of offset across ±`--window`, for the 10 highest-ranked selected samples |
+| `metaprofile.pdf` | the ranking statistic (mean `log1p` of depth-normalised support in a ±central-window) evaluated at each offset, for the 10 highest-ranked selected samples; height at offset 0 equals `central_binding` |
 | `metaprofile_maxpeak.pdf`, `metaprofile_windowfrac.pdf` | shape-only views of the same samples (Method 4) |
 | `metaprofile_matrix.npz` | raw per-locus, per-offset support of the top-ranked samples (`--save-matrix`) |
 | `binf_support_heatmap.pdf` | loci × selected samples; each cell is the strongest central peak. The title gives the BED name, the selection and the locus count |
@@ -52,7 +52,7 @@ and `bedtools`. The split and build scripts are also compatible with Python 3.6.
 | `--window` | 100 | half-window (nt) around each locus |
 | `--central-window` | 10 | half-width (nt) of the window scored for ranking |
 | `--support-pct` | 30 | percentage of top-ranked samples passed to the heatmap, tSNE and clustering (the THRAP3 runner uses 20) |
-| `--gaussian-sigma` | 2 | standard deviation (nt) of the metaprofile smoothing kernel |
+| `--gaussian-sigma` | 2 | standard deviation (nt) of the smoothing kernel for `metaprofile_windowfrac.pdf` |
 | `--heatmap-scale-percentile` | 99 | percentile of non-zero cells mapped to the top of the colour scale |
 | `--save-matrix [N]` | off (N = 10) | write the raw counts of the N top-ranked samples to `metaprofile_matrix.npz` |
 | `-n/--n-clusters` | off | number of k-means clusters of the heatmap loci (presence/absence) |
@@ -89,13 +89,18 @@ panel files.
    Samples with no region cDNA, or with no peak inside the central window of any locus, are
    excluded from selection.
 4. **Figures.**
-   - The metaprofile shows, at each offset across ±`--window`, the mean over all loci of
-     `log1p(support × 10⁶ / region_cdna)`, every peak included, smoothed with a Gaussian kernel.
-     This applies the ranking's transformation per offset, so curve height follows rank. A
-     linear mean of normalised support does not, because a few very strongly bound loci set
-     its height, whereas the ranking rewards binding many loci. Red dotted lines mark
-     ±central-window, the legend gives each sample's rank and score, and the title names the
-     inference BED (and therefore the region). The plot area is square with 12 pt text.
+   - The metaprofile is the ranking statistic evaluated at every offset: for each locus the
+     normalised support is summed over the ±central-window centred on offset `o`, `log1p` is
+     taken, and the result is averaged over all loci. At `o = 0` this equals `central_binding`
+     exactly, so the curves' heights at the locus follow the ranking by construction; elsewhere
+     it shows what the score would be if the loci sat `o` nt away. Only offsets whose whole
+     window lies inside ±`--window` are drawn (±90 nt by default), and the window sum itself
+     smooths the curve. On the THRAP3 data, alternatives left the top 10 out of rank order far
+     more often (of 45 pairs, exonic / intronic: linear mean 18 / 19; `log1p` per offset then
+     mean 10 / 8; either minus its flank mean no better; this version 2 / 4 by peak maximum and
+     0 / 0 at offset 0). Red dotted lines mark ±central-window, the legend gives each sample's
+     rank and score, and the title names the inference BED. The plot area is square with 12 pt
+     text.
    - Two shape-only views are also written. Both give every curve the same overall size, so
      height carries no information about rank; they compare how sharply binding is centred.
      - **maxpeak**: the metaprofile curve divided by its own maximum.
