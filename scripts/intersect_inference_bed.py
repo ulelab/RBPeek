@@ -9,9 +9,11 @@ Workflow
   2. Normalise: proportional_binding = cDNA of the sample's DISTINCT peaks inside the
      windows / the sample's peak cDNA inside --norm-bed, mitochondrial peaks excluded; each
      peak counts by the fraction of its width inside.
-  3. Rank samples by central binding - mean over all loci of log1p(support within
-     +/---central-window nt, per M region cDNA) - and keep the top --support-pct percent.
-  4. Plot the metaprofile (first 10 of those; the ranking statistic at every offset), write
+  3. Build each sample's metaprofile curve: at every offset, the mean over all loci of
+     log1p(support per M region cDNA). Rank samples by central binding - the area under that
+     curve within +/---central-window nt - and keep the top --support-pct percent. The score
+     and the plot are the same statistic, so curve height follows rank.
+  4. Plot the metaprofile (first 10 of those, Gaussian-smoothed), write
      sample_summary.tsv, then plot the heatmap and optional tSNE over the kept samples. Heatmap cells show only each locus's
      strongest central peak; the ranking and the metaprofile count every peak.
 
@@ -92,8 +94,8 @@ def parse_args():
     p.add_argument("--window", type=int, default=100,
                    help="Half-window size in nt around each locus (default 100)")
     p.add_argument("--gaussian-sigma", type=float, default=2.0,
-                   help="Gaussian smoothing sigma for metaprofile_windowfrac.pdf (default 2.0); the main "
-                        "metaprofile is smoothed by its own window sum")
+                   help="Gaussian smoothing sigma for the metaprofile (default 2.0); display only, the "
+                        "ranking uses the unsmoothed curve")
     p.add_argument(
         "--support-pct",
         type=float,
@@ -110,8 +112,8 @@ def parse_args():
         default=10,
         help=(
             "Half-width (nt) of the window around nt 0 counted by the ranking score (default 10, "
-            "i.e. offsets -10..+10). Every peak inside it counts toward the rank; a heatmap cell "
-            "shows only the peak with the most cDNA inside it."
+            "i.e. offsets -10..+10): the score is the area under the metaprofile curve inside it. "
+            "A heatmap cell shows only the peak with the most cDNA inside it."
         ),
     )
     p.add_argument("--heatmap-scale-percentile", type=float, default=99.0,
@@ -130,16 +132,11 @@ def parse_args():
     )
     p.add_argument(
         "--save-matrix",
-        type=int,
-        nargs="?",
-        const=10,
-        default=0,
-        metavar="N",
+        action="store_true",
         help=(
-            "Write metaprofile_matrix.npz: the raw per-locus, per-offset support of the N "
-            "top-ranked samples (default 10 when the flag is given without a number), so "
-            "metaprofile normalisations can be tried locally without rerunning. Only non-zero "
-            "entries are stored."
+            "Write metaprofile_matrix.npz: the raw per-locus, per-offset support of EVERY sample "
+            "as sparse triplets, so rankings and metaprofile styles can be explored locally with "
+            "scripts/explore_metaprofile.py without rerunning."
         ),
     )
     p.add_argument("--tsne", action="store_true",
@@ -540,56 +537,79 @@ def percentile_scale(matrix: np.ndarray, pct: float) -> np.ndarray:
     return np.clip(dense / hi, 0.0, 1.0)
 
 
-METAPROFILE_YLABEL = "Mean log1p support in the ±{cw} nt window centred at each offset\n(per M region cDNA)"
+METAPROFILE_YLABEL = "Mean log1p support per locus\n(per M region cDNA, smoothed)"
 
 
-def window_log_mean_profile(counts, scale, half):
+def log_mean_curve(counts, scale):
     """
-    The metaprofile curve: the ranking statistic evaluated at every offset. For each locus the
-    normalised support is summed over the +/-half nt window centred on offset o, log1p is taken,
-    and the result is averaged over all loci. At o = 0 this is central_binding exactly, so the
-    curves' heights at the locus follow the ranking by construction; elsewhere it shows what the
-    same score would be if the loci sat o nt away.
+    The statistic behind both the ranking and the metaprofile: at each offset, the mean over ALL
+    loci of log1p(support per M region cDNA). Unsmoothed.
 
-    Tried and rejected on the THRAP3 data (pairs of the top 10 whose peak heights were out of
-    rank order, exonic / intronic, of 45): a linear mean 18 / 19, the same minus its flank mean
-    18 / 20, log1p per offset then mean 10 / 8, that minus its flank 9 / 10; this one 2 / 4,
-    all between near-tied scores. Taking the log per OFFSET is not the same as the log of the
-    window SUM that the ranking uses, which is why the per-offset version drifted from the ranks.
+      - log1p per locus makes breadth count: a locus with 5,000 reads weighs about 5x one with
+        5 reads, not 1,000x. Without it a few loci decide everything (intronic K562-PPIL4 took
+        51% of its central signal from 1% of its loci).
+      - the mean is over all loci, so loci a sample does not bind count as 0.
+      - dividing by region cDNA removes sequencing depth.
 
-    Only offsets whose whole window lies inside +/-window are returned, i.e. offsets
-    -(window-half)..+(window-half). The window sum smooths the curve, so no Gaussian is applied.
+    central_binding is this curve's area within +/-central-window. On the THRAP3 data that put
+    the smoothed peak heights of the top 10 in exact rank order in both regions (0 of 45 pairs
+    out of order), where scoring the log of the +/-10 SUM left 10 (exonic) and 8 (intronic) pairs
+    out of order, and any linear mean 18.
     """
-    x = counts.astype(np.float64) * scale
-    cs = np.concatenate([np.zeros((x.shape[0], 1)), np.cumsum(x, axis=1)], axis=1)
-    width = 2 * half + 1
-    return np.log1p(np.clip(cs[:, width:] - cs[:, :-width], 0.0, None)).mean(axis=0)
+    return np.log1p(counts.astype(np.float64) * scale).mean(axis=0)
 
 
-def window_fraction_profile(counts, sigma):
+def sparse_triplets(counts):
+    rows, cols = np.nonzero(counts)
+    return rows.astype(np.int32), cols.astype(np.int16), counts[rows, cols].astype(np.float32)
+
+
+def save_counts_matrix(path, names, triplets, rank, selected, stats, binf_keys, window, central_window) -> None:
     """
-    Shape-only metaprofile: each locus's profile is divided by its own total over the whole
-    window, so it sums to 1, and the profiles are averaged over the loci the sample binds.
-    Every bound locus counts equally, so a few very strong loci cannot set the shape, and
-    sequencing depth and region cDNA cancel entirely. A sample with no positional preference
-    sits at 1 / window width at every offset.
+    Save every sample's raw counts as sparse triplets in one .npz. For sample i,
+    counts[rows_i, cols_i] = vals_i in a (n_loci x 2*window+1) matrix of raw peak cDNA (no depth
+    normalisation, no log); column j is offset offsets[j]. Read with load_counts_matrix().
     """
-    c = counts.astype(np.float64)
-    totals = c.sum(axis=1)
-    bound = totals > 0
-    if not bound.any():
-        return np.zeros(c.shape[1])
-    return smooth_metaprofile_gaussian((c[bound] / totals[bound, None]).mean(axis=0), sigma)
+    chosen = set(selected)
+    out = {
+        "samples": np.array(names),
+        "rank": np.array([rank[pn] for pn in names], dtype=np.int32),
+        "selected": np.array([pn in chosen for pn in names]),
+        "central_binding": np.array([stats[pn]["central"] for pn in names], dtype=np.float64),
+        "region_cdna": np.array([stats[pn]["region_cdna"] for pn in names], dtype=np.float64),
+        "offsets": np.arange(-window, window + 1, dtype=np.int32),
+        "loci": np.array(binf_keys),
+        "central_window": np.array(central_window, dtype=np.int32),
+    }
+    for i, pn in enumerate(names):
+        out[f"rows_{i}"], out[f"cols_{i}"], out[f"vals_{i}"] = triplets[pn]
+    np.savez_compressed(path, **out)
 
 
-def max_scaled(profile):
-    """The curve divided by its own maximum, so every sample peaks at 1 and only shape remains."""
-    top = float(np.max(profile)) if profile.size else 0.0
-    return profile / top if top > 0 else np.zeros_like(profile)
+def load_counts_matrix(path, samples=None):
+    """
+    Returns (meta, counts): meta holds samples, rank, selected, central_binding, region_cdna,
+    offsets, loci and central_window for every sample in the file; counts maps sample -> dense
+    float32 (n_loci x n_offsets) array for the requested samples (default: all - about 16 MB
+    each for 20,000 loci, so pass a subset for a full panel).
+    """
+    z = np.load(path, allow_pickle=False)
+    keys = ["samples", "rank", "central_binding", "region_cdna", "offsets", "loci", "central_window"]
+    meta = {k: z[k] for k in keys}
+    meta["selected"] = z["selected"] if "selected" in z.files else np.ones(len(z["samples"]), dtype=bool)
+    want = None if samples is None else {str(x) for x in samples}
+    dense = {}
+    for i, pn in enumerate(meta["samples"]):
+        if want is not None and str(pn) not in want:
+            continue
+        m = np.zeros((len(meta["loci"]), len(meta["offsets"])), dtype=np.float32)
+        m[z[f"rows_{i}"], z[f"cols_{i}"]] = z[f"vals_{i}"]
+        dense[str(pn)] = m
+    return meta, dense
 
 
 def render_metaprofile(offsets, profiles, order, legend, window, out_path, title, central_window,
-                       ylabel=None, hline=None) -> None:
+                       ylabel=METAPROFILE_YLABEL, hline=None) -> None:
     """One metaprofile panel: square plot area, 12 pt text, legend to the right."""
     with plt.rc_context({"font.size": 12, "axes.titlesize": 12, "axes.labelsize": 12,
                          "xtick.labelsize": 12, "ytick.labelsize": 12, "legend.fontsize": 12}):
@@ -610,7 +630,7 @@ def render_metaprofile(offsets, profiles, order, legend, window, out_path, title
         for edge in (-central_window, central_window):
             ax.axvline(edge, color="red", linestyle=":", linewidth=1.2)
         ax.set_xlabel("Relative nucleotide position around inference loci (nt)")
-        ax.set_ylabel(ylabel or METAPROFILE_YLABEL.format(cw=central_window))
+        ax.set_ylabel(ylabel)
         if hline is not None:
             ax.axhline(hline, color="grey", linestyle="--", linewidth=1)
         ax.set_xlim(-window, window)
@@ -626,7 +646,7 @@ def render_metaprofile(offsets, profiles, order, legend, window, out_path, title
 def plot_cluster_metaprofiles(protein_sources, order, scale, legend, cluster_ids, labels, windows_bed,
                               binf_index, window, n_binf, sigma, outdir, central_window, region) -> None:
     """One metaprofile per k-means cluster, over the same samples as the global one."""
-    offsets = np.arange(-(window - central_window), window - central_window + 1, dtype=np.int64)
+    offsets = np.arange(-window, window + 1, dtype=np.int64)
     masks = {cid: labels == cid for cid in cluster_ids}
     profiles: dict[int, dict[str, np.ndarray]] = {cid: {} for cid in cluster_ids}
     wanted = set(order)
@@ -636,7 +656,7 @@ def plot_cluster_metaprofiles(protein_sources, order, scale, legend, cluster_ids
         counts, _, _ = compute_counts_for_protein(path, windows_bed, binf_index, window, n_binf)
         for cid in cluster_ids:
             if masks[cid].any():
-                profiles[cid][pn] = window_log_mean_profile(counts[masks[cid]], scale[pn], central_window)
+                profiles[cid][pn] = smooth_metaprofile_gaussian(log_mean_curve(counts[masks[cid]], scale[pn]), sigma)
     for cid in cluster_ids:
         if not profiles[cid]:
             continue
@@ -645,44 +665,6 @@ def plot_cluster_metaprofiles(protein_sources, order, scale, legend, cluster_ids
         render_metaprofile(offsets, profiles[cid], [pn for pn in order if pn in profiles[cid]], legend,
                            window, out, f"{region}\ncluster C{cid}   |   n = {n:,} loci", central_window)
         print(f"Wrote cluster metaprofile plot to: {out}")
-
-
-def save_counts_matrix(path, protein_sources, names, rank, stats, binf_keys, windows_bed, binf_index,
-                       window, n_binf, central_window) -> None:
-    """
-    Save the raw counts of the named samples as sparse triplets in one .npz. For sample i,
-    counts[rows_i, cols_i] = vals_i in a (n_loci x 2*window+1) matrix of raw peak cDNA (no
-    depth normalisation, no log); column j is offset offsets[j]. Load with load_counts_matrix().
-    """
-    sources = dict(protein_sources)
-    out = {
-        "samples": np.array(names),
-        "rank": np.array([rank[pn] for pn in names], dtype=np.int32),
-        "central_binding": np.array([stats[pn]["central"] for pn in names], dtype=np.float64),
-        "region_cdna": np.array([stats[pn]["region_cdna"] for pn in names], dtype=np.float64),
-        "offsets": np.arange(-window, window + 1, dtype=np.int32),
-        "loci": np.array(binf_keys),
-        "central_window": np.array(central_window, dtype=np.int32),
-    }
-    for i, pn in enumerate(names):
-        counts, _, _ = compute_counts_for_protein(sources[pn], windows_bed, binf_index, window, n_binf, central_window)
-        rows, cols = np.nonzero(counts)
-        out[f"rows_{i}"] = rows.astype(np.int32)
-        out[f"cols_{i}"] = cols.astype(np.int16)
-        out[f"vals_{i}"] = counts[rows, cols].astype(np.float32)
-    np.savez_compressed(path, **out)
-
-
-def load_counts_matrix(path):
-    """Inverse of save_counts_matrix: returns (meta dict, {sample: dense float32 counts})."""
-    z = np.load(path, allow_pickle=False)
-    meta = {k: z[k] for k in ("samples", "rank", "central_binding", "region_cdna", "offsets", "loci", "central_window")}
-    dense = {}
-    for i, pn in enumerate(meta["samples"]):
-        m = np.zeros((len(meta["loci"]), len(meta["offsets"])), dtype=np.float32)
-        m[z[f"rows_{i}"], z[f"cols_{i}"]] = z[f"vals_{i}"]
-        dense[str(pn)] = m
-    return meta, dense
 
 
 def make_tsne(matrix, labels, cluster_to_color, out_path, perplexity) -> None:
@@ -774,13 +756,12 @@ def main():
         protein_names = [name for name, _ in protein_sources]
         n_binf = len(binf_keys)
         offsets = np.arange(-args.window, args.window + 1, dtype=np.int64)
-        # Offsets counted by the ranking score: 1 within +/-central-window nt of the locus, else 0.
-        central = (np.abs(offsets) <= args.central_window).astype(np.float64)
+        in_central = np.abs(offsets) <= args.central_window
 
         # ---- 1. per-sample counts, statistics and normalisation ----
         best_by: dict[str, np.ndarray] = {}
         profiles: dict[str, np.ndarray] = {}
-        frac_profiles: dict[str, np.ndarray] = {}
+        triplets: dict[str, tuple] = {}
         stats: dict[str, dict] = {}
         for pn, path in protein_sources:
             counts, locus_cdna, central_max = compute_counts_for_protein(
@@ -790,15 +771,16 @@ def main():
             scale = PER_MILLION / reg if reg > 0 else 0.0
             has = totals > 0
             best_by[pn] = central_max
-            profiles[pn] = window_log_mean_profile(counts, scale, args.central_window)
-            frac_profiles[pn] = window_fraction_profile(counts, args.gaussian_sigma)
+            curve = log_mean_curve(counts, scale)
+            profiles[pn] = smooth_metaprofile_gaussian(curve, args.gaussian_sigma)
+            if args.save_matrix:
+                triplets[pn] = sparse_triplets(counts)
             stats[pn] = {
                 "locus_cdna": locus_cdna,
                 "region_cdna": reg,
                 "scale": scale,
                 "prop": locus_cdna / reg if reg > 0 else float("nan"),
-                "central": float(np.log1p((counts.astype(np.float64) @ central) * scale).mean())
-                if reg > 0 else float("nan"),
+                "central": float(curve[in_central].sum()) if reg > 0 else float("nan"),
                 "total": float(totals.sum()),
                 "n_sig": int(has.sum()),
                 "mean_offset": _mean_or_nan(maxoff[has].astype(np.float64)),
@@ -815,9 +797,10 @@ def main():
                   f"binding scores are NA and they rank last: {', '.join(no_region[:5])}" + (" ..." if len(no_region) > 5 else ""))
 
         # ---- 2. rank by central binding, keep the top --support-pct ----
-        # central_binding = mean over ALL loci of log1p(support within +/-central-window nt of the
-        # locus, per M region cDNA). Every peak in the window counts here; only the heatmap is
-        # restricted to the strongest one. Each part answers a failure seen on the THRAP3 runs:
+        # central_binding = the area within +/-central-window nt under log_mean_curve(), i.e. the
+        # same statistic the metaprofile plots, so curve height follows rank. Every peak counts
+        # here; only the heatmap is restricted to the strongest one. Each part answers a failure
+        # seen on the THRAP3 runs:
         #   - the central window counts binding at the locus, not binding 50-100 nt away;
         #   - dividing by region cDNA takes sequencing depth out;
         #   - log1p stops a few loci deciding the rank: raw mean support was led by K562-SSB,
@@ -848,38 +831,19 @@ def main():
         meta_set = selected[:METAPROFILE_MAX]
         legend = {pn: f"rank {rank[pn]}, central binding {stats[pn]['central']:.3f}" for pn in meta_set}
         meta_path = outdir / "metaprofile.pdf"
-        meta_offsets = offsets[args.central_window:len(offsets) - args.central_window]
         render_metaprofile(
-            meta_offsets, profiles, meta_set, legend, args.window, meta_path,
+            offsets, profiles, meta_set, legend, args.window, meta_path,
             f"{binf_path.stem}\ntop {len(meta_set)} of {len(ranked)} samples by central binding "
             f"(±{args.central_window} nt, red dotted lines)   |   n = {n_binf:,} loci",
             args.central_window,
         )
         print(f"Wrote metaprofile plot to: {meta_path}")
 
-        # Two shape-only views of the same samples. Both give every curve the same overall size
-        # (peak of 1, or area of 1), so height no longer says anything about rank; they compare
-        # how sharply each sample's binding is centred on the locus.
-        title = (f"{binf_path.stem}\ntop {len(meta_set)} of {len(ranked)} samples by central binding "
-                 f"(±{args.central_window} nt, red dotted lines)   |   n = {n_binf:,} loci")
-        shape_views = [
-            ("metaprofile_maxpeak.pdf", {pn: max_scaled(profiles[pn]) for pn in meta_set},
-             "Metaprofile curve scaled to each sample's maximum", None, meta_offsets),
-            ("metaprofile_windowfrac.pdf", frac_profiles,
-             f"Mean fraction of a bound locus's ±{args.window} nt signal\nat each offset (smoothed)",
-             1.0 / (2 * args.window + 1), offsets),
-        ]
-        for fname, curves, ylabel, hline, x in shape_views:
-            render_metaprofile(x, curves, meta_set, legend, args.window, outdir / fname, title,
-                               args.central_window, ylabel=ylabel, hline=hline)
-            print(f"Wrote metaprofile plot to: {outdir / fname}")
-
         if args.save_matrix:
             matrix_path = outdir / "metaprofile_matrix.npz"
-            matrix_names = ranked[:args.save_matrix]
-            save_counts_matrix(matrix_path, protein_sources, matrix_names, rank, stats, binf_keys, windows_bed,
-                               binf_index, args.window, n_binf, args.central_window)
-            print(f"Wrote raw counts of the top {len(matrix_names)} samples to: {matrix_path} "
+            save_counts_matrix(matrix_path, ranked, triplets, rank, selected, stats, binf_keys,
+                               args.window, args.central_window)
+            print(f"Wrote raw counts of all {len(ranked)} samples to: {matrix_path} "
                   f"({matrix_path.stat().st_size / 1e6:.1f} MB)")
 
         # ---- 4. the one combined table ----

@@ -32,9 +32,8 @@ and `bedtools`. The split and build scripts are also compatible with Python 3.6.
 | file | contents |
 |---|---|
 | `sample_summary.tsv` | one row per panel sample, sorted by rank ([columns](#sample_summarytsv)) |
-| `metaprofile.pdf` | the ranking statistic (mean `log1p` of depth-normalised support in a ±central-window) evaluated at each offset, for the 10 highest-ranked selected samples; height at offset 0 equals `central_binding` |
-| `metaprofile_maxpeak.pdf`, `metaprofile_windowfrac.pdf` | shape-only views of the same samples (Method 4) |
-| `metaprofile_matrix.npz` | raw per-locus, per-offset support of the top-ranked samples (`--save-matrix`) |
+| `metaprofile.pdf` | mean `log1p` depth-normalised support at each offset across ±`--window`, for the 10 highest-ranked selected samples; the ranking score is this curve's area inside ±central-window |
+| `metaprofile_matrix.npz` | raw per-locus, per-offset support of every sample (`--save-matrix`), for `explore_metaprofile.py` |
 | `binf_support_heatmap.pdf` | loci × selected samples; each cell is the strongest central peak. The title gives the BED name, the selection and the locus count |
 | `binf_summary_tsne.png` | tSNE embedding of the heatmap loci (`--tsne`) |
 | `binf_heatmap_clusters.tsv`, `metaprofile_cluster_C*.pdf` | k-means clusters of the heatmap loci and one metaprofile per cluster (`-n`) |
@@ -50,11 +49,11 @@ and `bedtools`. The split and build scripts are also compatible with Python 3.6.
 | `--genome` | HPC hg38 | chromosome sizes for `bedtools slop` |
 | `-o/--outdir` | `results` | output directory |
 | `--window` | 100 | half-window (nt) around each locus |
-| `--central-window` | 10 | half-width (nt) of the window scored for ranking |
+| `--central-window` | 10 | half-width (nt) of the window whose area under the curve is the ranking score |
 | `--support-pct` | 30 | percentage of top-ranked samples passed to the heatmap, tSNE and clustering (the THRAP3 runner uses 20) |
-| `--gaussian-sigma` | 2 | standard deviation (nt) of the smoothing kernel for `metaprofile_windowfrac.pdf` |
+| `--gaussian-sigma` | 2 | standard deviation (nt) of the metaprofile smoothing kernel (display only) |
 | `--heatmap-scale-percentile` | 99 | percentile of non-zero cells mapped to the top of the colour scale |
-| `--save-matrix [N]` | off (N = 10) | write the raw counts of the N top-ranked samples to `metaprofile_matrix.npz` |
+| `--save-matrix` | off | write every sample's raw counts to `metaprofile_matrix.npz` |
 | `-n/--n-clusters` | off | number of k-means clusters of the heatmap loci (presence/absence) |
 | `--tsne`, `--tsne-perplexity` | off, 30 | tSNE of the heatmap loci |
 
@@ -76,42 +75,34 @@ panel files.
    - `locus_cdna`: the sample's cDNA within any locus window, with each distinct peak counted
      once.
    - `proportional_binding` = `locus_cdna / region_cdna`.
-3. **Ranking.** `central_binding` is the mean over **all** loci of
-   `log1p(support within ±central-window × 10⁶ / region_cdna)`, where every peak in the window
-   contributes.
-   - Restricting the score to the central window limits it to binding at the locus itself.
+3. **Ranking.** Each sample has a curve `m(o)`: at every offset `o`, the mean over **all** loci of
+   `log1p(support × 10⁶ / region_cdna)`, every peak included. `central_binding` is the area
+   under that curve within ±central-window, and samples are ranked by it. The score and the
+   metaprofile are therefore the same statistic, so curve height follows rank.
+   - Restricting the area to the central window limits the score to binding at the locus itself.
    - Division by `region_cdna` normalises for sequencing depth.
-   - The `log1p` transform limits the influence of a small number of very strongly bound loci.
-   - Averaging over all loci assigns unbound loci a value of 0. This penalises sparse samples;
-     consequently, a sample that binds few loci strongly ranks below one that binds many loci
-     moderately.
+   - `log1p` per locus makes breadth count: a locus with 5,000 reads weighs about 5× one with
+     5 reads, not 1,000×. Without it a few loci decide the rank (one intronic sample took 51%
+     of its central signal from 1% of its loci).
+   - Averaging over all loci assigns unbound loci a value of 0, which penalises sparse samples.
 
    Samples with no region cDNA, or with no peak inside the central window of any locus, are
    excluded from selection.
 4. **Figures.**
-   - The metaprofile is the ranking statistic evaluated at every offset: for each locus the
-     normalised support is summed over the ±central-window centred on offset `o`, `log1p` is
-     taken, and the result is averaged over all loci. At `o = 0` this equals `central_binding`
-     exactly, so the curves' heights at the locus follow the ranking by construction; elsewhere
-     it shows what the score would be if the loci sat `o` nt away. Only offsets whose whole
-     window lies inside ±`--window` are drawn (±90 nt by default), and the window sum itself
-     smooths the curve. On the THRAP3 data, alternatives left the top 10 out of rank order far
-     more often (of 45 pairs, exonic / intronic: linear mean 18 / 19; `log1p` per offset then
-     mean 10 / 8; either minus its flank mean no better; this version 2 / 4 by peak maximum and
-     0 / 0 at offset 0). Red dotted lines mark ±central-window, the legend gives each sample's
-     rank and score, and the title names the inference BED. The plot area is square with 12 pt
-     text.
-   - Two shape-only views are also written. Both give every curve the same overall size, so
-     height carries no information about rank; they compare how sharply binding is centred.
-     - **maxpeak**: the metaprofile curve divided by its own maximum.
-     - **windowfrac**: each locus's profile is divided by its own total over ±`--window`, then
-       averaged over the loci the sample binds. Every bound locus counts equally, and depth and
-       `region_cdna` cancel. The dashed line marks no positional preference (1 / window width).
-   - `--save-matrix` stores the raw counts (no normalisation, no log) as sparse triplets, so
-     normalisations can be tried without rerunning:
-     `meta, counts = load_counts_matrix("metaprofile_matrix.npz")` (in
-     `intersect_inference_bed.py`) returns the sample names, ranks, `central_binding`,
-     `region_cdna`, offsets and locus names, and one loci × offsets array per sample.
+   - The metaprofile plots `m(o)` across ±`--window`, smoothed with a Gaussian kernel (the score
+     uses the unsmoothed curve). On the THRAP3 data this puts the peak heights of the top 10 in
+     exact rank order in both regions (0 of 45 pairs out of order); scoring the `log1p` of each
+     locus's ±10 sum left 10 / 8 pairs out of order against the same plot, and any mean without
+     `log1p` 18. Red dotted lines mark ±central-window, the legend gives each sample's rank and
+     score, and the title names the inference BED. The plot area is square with 12 pt text.
+   - Peak width is set by the method, not by the proteins: Clippy calls peaks on a 10 nt rolling
+     mean, so panel peaks are about 11 nt wide, and each peak's cDNA is spread evenly across it.
+     Every sample's central peak is therefore 10–13 nt wide at half maximum, with a dip on each
+     side where no second peak can be called.
+   - `--save-matrix` stores every sample's raw counts (no normalisation, no log) as sparse
+     triplets. `scripts/explore_metaprofile.py` re-ranks and redraws from that file alone, e.g.
+     `--curve {log,linear,windowlog,windowlinear} --rank-by {area,height0,file}
+     [--subtract-flank]`, and reports how well peak height follows the chosen ranking.
    - Heatmap values are scaled by 10⁶ / `region_cdna`.
    - Each heatmap cell is the sample's **strongest central peak** at that locus: the cDNA inside
      ±central-window of the peak contributing the most cDNA there. The ranking, in contrast,
@@ -129,7 +120,7 @@ panel files.
 | column | meaning |
 |---|---|
 | `rank`, `selected` | rank by `central_binding`; whether the sample was selected |
-| `central_binding` | the ranking score (Method 3) |
+| `central_binding` | the ranking score: area under the sample's mean-`log1p` curve within ±central-window (Method 3) |
 | `proportional_binding`, `locus_cdna`, `region_cdna` | see Method 2 |
 | `total_peak_support`, `mean_peak_support` | support summed over every locus window (a peak near two loci is counted in both), and that sum divided by the number of loci |
 | `loci_with_signal`, `frac_loci_with_signal` | loci with any support within ±`--window` |
@@ -164,6 +155,7 @@ values. The eCLIP samplesheet excludes `HNRNPC-Hela-iCLIP`, the only assay-match
 | `build_thrap3_inference_bed.py` | THRAP3 replicate peaks → inference BED |
 | `merge_replicate_peaks.py` | pools replicate peak BEDs by summing scores at identical intervals (used for the `peaks/merged/` panel entries) |
 | `build_gene_matrix_from_summaries.py` | Flow `*.summary_gene.tsv` files → gene × sample count and RPKM matrices |
+| `explore_metaprofile.py` | re-rank and redraw metaprofiles from `metaprofile_matrix.npz` without rerunning the analysis |
 | `plot_expression_heatmap.py` | clustered expression heatmap for a gene list (`.xlsx` or text); plots the 100 most variable matched genes by default |
 
 `Centrosome/` and `decoys/` contain data from earlier analyses and are not used by the THRAP3

@@ -55,5 +55,5 @@ python3 scripts/intersect_inference_bed.py \
   -o "$OUT" \
   --window 100 \
   --support-pct 20 \
-  --save-matrix 10 \
+  --save-matrix \
   --tsne
