@@ -49,7 +49,6 @@ other scripts require only Python ≥ 3.6 and `bedtools`.
 | `--window` | 100 | half-width (nt) of the window around each locus |
 | `--central-window` | 10 | half-width (nt) of the central window used for ranking |
 | `--support-pct` | 30 | percentage of top-ranked samples shown in the heatmap and tSNE |
-| `--gaussian-sigma` | 2 | standard deviation (nt) of the Gaussian kernel used to smooth the plotted metaprofile |
 | `--heatmap-scale-percentile` | 99 | percentile of non-zero heatmap values mapped to the top of the colour scale |
 | `--tsne`, `--tsne-perplexity` | off, 30 | tSNE embedding of the heatmap loci |
 
@@ -79,8 +78,8 @@ the panel files.
    rank. Samples without region cDNA, or without a peak in the central window of any locus, are
    not selected.
 5. **Figures.**
-   - `metaprofile.pdf` shows *m*(*o*) for the ten highest-ranked samples, smoothed with a
-     Gaussian kernel (the ranking uses the unsmoothed curve). Red dotted lines mark the central
+   - `metaprofile.pdf` shows *m*(*o*) for the ten highest-ranked samples, without smoothing, so
+     the area between the red dotted lines equals `central_binding`. These lines mark the central
      window, and the legend gives the rank and `central_binding` of each sample.
    - `binf_support_heatmap.pdf` shows loci × selected samples. Each cell is the strongest single
      peak of the sample within the central window of the locus (the cDNA of that peak inside the

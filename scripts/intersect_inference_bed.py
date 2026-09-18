@@ -15,7 +15,7 @@ Method
      +/- --central-window nt. Samples are ranked by central_binding and the top --support-pct
      percent are selected. The ranking score and the plotted curve are the same statistic, so
      curve height reflects rank.
-  4. Output. metaprofile.pdf (Gaussian-smoothed m(o) of the highest-ranked samples),
+  4. Output. metaprofile.pdf (m(o) of the highest-ranked samples),
      sample_summary.tsv (one row per sample), binf_support_heatmap.pdf (loci x selected
      samples) and, with --tsne, binf_summary_tsne.png.
 """
@@ -48,7 +48,7 @@ METAPROFILE_MAX = 10
 # mitochondrial rRNA is a major source of background in eCLIP libraries.
 CHRM = {"chrM", "chrMT", "MT", "M"}
 PER_MILLION = 1e6
-METAPROFILE_YLABEL = "Mean log1p support per locus\n(per M region cDNA, smoothed)"
+METAPROFILE_YLABEL = "Mean log1p support per locus\n(per M region cDNA)"
 
 
 def parse_args():
@@ -72,9 +72,6 @@ def parse_args():
     p.add_argument("--support-pct", type=float, default=30.0,
                    help="Percentage of top-ranked samples shown in the heatmap and tSNE (default: 30); "
                         f"the metaprofile shows the first {METAPROFILE_MAX} of them")
-    p.add_argument("--gaussian-sigma", type=float, default=2.0,
-                   help="Standard deviation (nt) of the Gaussian kernel used to smooth the plotted "
-                        "metaprofile; the ranking uses the unsmoothed curve (default: 2)")
     p.add_argument("--heatmap-scale-percentile", type=float, default=99.0,
                    help="Percentile of non-zero heatmap values mapped to the top of the colour scale (default: 99)")
     p.add_argument("--tsne", action="store_true", help="Write a tSNE embedding of the heatmap loci")
@@ -425,14 +422,6 @@ def compute_summary_stats(counts: np.ndarray, window: int):
     return totals, variance, pearson_median_skew, kurtosis_excess, max_binding_offset
 
 
-def smooth_metaprofile_gaussian(meta_counts: np.ndarray, sigma: float = 2.0) -> np.ndarray:
-    radius = max(1, int(round(4.0 * sigma)))
-    x = np.arange(-radius, radius + 1, dtype=np.float64)
-    kernel = np.exp(-0.5 * (x / sigma) ** 2)
-    kernel /= kernel.sum()
-    return np.convolve(meta_counts, kernel, mode="same")
-
-
 def percentile_scale(matrix: np.ndarray, pct: float) -> np.ndarray:
     """
     Apply log1p and scale to [0, 1] against the pct-th percentile of the non-zero values, with
@@ -454,7 +443,7 @@ def percentile_scale(matrix: np.ndarray, pct: float) -> np.ndarray:
 def log_mean_curve(counts, scale):
     """
     Metaprofile curve m(o): at each offset, the mean over all loci of log1p(support x scale),
-    where scale = 1e6 / region_cdna. Unsmoothed.
+    where scale = 1e6 / region_cdna.
 
     The log1p transform is applied per locus before averaging so that the curve reflects the
     breadth of binding across loci rather than being dominated by a small number of strongly
@@ -583,7 +572,7 @@ def main():
             has = totals > 0
             best_by[pn] = central_max
             curve = log_mean_curve(counts, scale)
-            profiles[pn] = smooth_metaprofile_gaussian(curve, args.gaussian_sigma)
+            profiles[pn] = curve
             stats[pn] = {
                 "locus_cdna": locus_cdna,
                 "region_cdna": reg,
