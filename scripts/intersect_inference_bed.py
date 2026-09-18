@@ -127,6 +127,20 @@ def parse_args():
             "the tSNE by cluster."
         ),
     )
+    p.add_argument(
+        "--save-matrix",
+        type=int,
+        nargs="?",
+        const=10,
+        default=0,
+        metavar="N",
+        help=(
+            "Write metaprofile_matrix.npz: the raw per-locus, per-offset support of the N "
+            "top-ranked samples (default 10 when the flag is given without a number), so "
+            "metaprofile normalisations can be tried locally without rerunning. Only non-zero "
+            "entries are stored."
+        ),
+    )
     p.add_argument("--tsne", action="store_true",
                    help="Also write a tSNE of the heatmap's loci over the selected samples")
     p.add_argument("--tsne-perplexity", type=float, default=30.0, help="tSNE perplexity (default 30)")
@@ -538,7 +552,30 @@ def log_mean_profile(counts, scale, sigma):
     return smooth_metaprofile_gaussian(np.log1p(counts.astype(np.float64) * scale).mean(axis=0), sigma)
 
 
-def render_metaprofile(offsets, profiles, order, legend, window, out_path, title, central_window) -> None:
+def window_fraction_profile(counts, sigma):
+    """
+    Shape-only metaprofile: each locus's profile is divided by its own total over the whole
+    window, so it sums to 1, and the profiles are averaged over the loci the sample binds.
+    Every bound locus counts equally, so a few very strong loci cannot set the shape, and
+    sequencing depth and region cDNA cancel entirely. A sample with no positional preference
+    sits at 1 / window width at every offset.
+    """
+    c = counts.astype(np.float64)
+    totals = c.sum(axis=1)
+    bound = totals > 0
+    if not bound.any():
+        return np.zeros(c.shape[1])
+    return smooth_metaprofile_gaussian((c[bound] / totals[bound, None]).mean(axis=0), sigma)
+
+
+def max_scaled(profile):
+    """The curve divided by its own maximum, so every sample peaks at 1 and only shape remains."""
+    top = float(np.max(profile)) if profile.size else 0.0
+    return profile / top if top > 0 else np.zeros_like(profile)
+
+
+def render_metaprofile(offsets, profiles, order, legend, window, out_path, title, central_window,
+                       ylabel=METAPROFILE_YLABEL, hline=None) -> None:
     """One metaprofile panel: square plot area, 12 pt text, legend to the right."""
     with plt.rc_context({"font.size": 12, "axes.titlesize": 12, "axes.labelsize": 12,
                          "xtick.labelsize": 12, "ytick.labelsize": 12, "legend.fontsize": 12}):
@@ -559,7 +596,9 @@ def render_metaprofile(offsets, profiles, order, legend, window, out_path, title
         for edge in (-central_window, central_window):
             ax.axvline(edge, color="red", linestyle=":", linewidth=1.2)
         ax.set_xlabel("Relative nucleotide position around inference loci (nt)")
-        ax.set_ylabel(METAPROFILE_YLABEL)
+        ax.set_ylabel(ylabel)
+        if hline is not None:
+            ax.axhline(hline, color="grey", linestyle="--", linewidth=1)
         ax.set_xlim(-window, window)
         # Left-aligned and allowed to run over the legend column: at 12 pt the title is wider
         # than the square plot area.
@@ -592,6 +631,44 @@ def plot_cluster_metaprofiles(protein_sources, order, scale, legend, cluster_ids
         render_metaprofile(offsets, profiles[cid], [pn for pn in order if pn in profiles[cid]], legend,
                            window, out, f"{region}\ncluster C{cid}   |   n = {n:,} loci", central_window)
         print(f"Wrote cluster metaprofile plot to: {out}")
+
+
+def save_counts_matrix(path, protein_sources, names, rank, stats, binf_keys, windows_bed, binf_index,
+                       window, n_binf, central_window) -> None:
+    """
+    Save the raw counts of the named samples as sparse triplets in one .npz. For sample i,
+    counts[rows_i, cols_i] = vals_i in a (n_loci x 2*window+1) matrix of raw peak cDNA (no
+    depth normalisation, no log); column j is offset offsets[j]. Load with load_counts_matrix().
+    """
+    sources = dict(protein_sources)
+    out = {
+        "samples": np.array(names),
+        "rank": np.array([rank[pn] for pn in names], dtype=np.int32),
+        "central_binding": np.array([stats[pn]["central"] for pn in names], dtype=np.float64),
+        "region_cdna": np.array([stats[pn]["region_cdna"] for pn in names], dtype=np.float64),
+        "offsets": np.arange(-window, window + 1, dtype=np.int32),
+        "loci": np.array(binf_keys),
+        "central_window": np.array(central_window, dtype=np.int32),
+    }
+    for i, pn in enumerate(names):
+        counts, _, _ = compute_counts_for_protein(sources[pn], windows_bed, binf_index, window, n_binf, central_window)
+        rows, cols = np.nonzero(counts)
+        out[f"rows_{i}"] = rows.astype(np.int32)
+        out[f"cols_{i}"] = cols.astype(np.int16)
+        out[f"vals_{i}"] = counts[rows, cols].astype(np.float32)
+    np.savez_compressed(path, **out)
+
+
+def load_counts_matrix(path):
+    """Inverse of save_counts_matrix: returns (meta dict, {sample: dense float32 counts})."""
+    z = np.load(path, allow_pickle=False)
+    meta = {k: z[k] for k in ("samples", "rank", "central_binding", "region_cdna", "offsets", "loci", "central_window")}
+    dense = {}
+    for i, pn in enumerate(meta["samples"]):
+        m = np.zeros((len(meta["loci"]), len(meta["offsets"])), dtype=np.float32)
+        m[z[f"rows_{i}"], z[f"cols_{i}"]] = z[f"vals_{i}"]
+        dense[str(pn)] = m
+    return meta, dense
 
 
 def make_tsne(matrix, labels, cluster_to_color, out_path, perplexity) -> None:
@@ -689,6 +766,7 @@ def main():
         # ---- 1. per-sample counts, statistics and normalisation ----
         best_by: dict[str, np.ndarray] = {}
         profiles: dict[str, np.ndarray] = {}
+        frac_profiles: dict[str, np.ndarray] = {}
         stats: dict[str, dict] = {}
         for pn, path in protein_sources:
             counts, locus_cdna, central_max = compute_counts_for_protein(
@@ -699,6 +777,7 @@ def main():
             has = totals > 0
             best_by[pn] = central_max
             profiles[pn] = log_mean_profile(counts, scale, args.gaussian_sigma)
+            frac_profiles[pn] = window_fraction_profile(counts, args.gaussian_sigma)
             stats[pn] = {
                 "locus_cdna": locus_cdna,
                 "region_cdna": reg,
@@ -762,6 +841,31 @@ def main():
             args.central_window,
         )
         print(f"Wrote metaprofile plot to: {meta_path}")
+
+        # Two shape-only views of the same samples. Both give every curve the same overall size
+        # (peak of 1, or area of 1), so height no longer says anything about rank; they compare
+        # how sharply each sample's binding is centred on the locus.
+        title = (f"{binf_path.stem}\ntop {len(meta_set)} of {len(ranked)} samples by central binding "
+                 f"(±{args.central_window} nt, red dotted lines)   |   n = {n_binf:,} loci")
+        shape_views = [
+            ("metaprofile_maxpeak.pdf", {pn: max_scaled(profiles[pn]) for pn in meta_set},
+             "Mean log1p support per locus,\nscaled to each sample's maximum", None),
+            ("metaprofile_windowfrac.pdf", frac_profiles,
+             f"Mean fraction of a bound locus's ±{args.window} nt signal\nat each offset (smoothed)",
+             1.0 / (2 * args.window + 1)),
+        ]
+        for fname, curves, ylabel, hline in shape_views:
+            render_metaprofile(offsets, curves, meta_set, legend, args.window, outdir / fname, title,
+                               args.central_window, ylabel=ylabel, hline=hline)
+            print(f"Wrote metaprofile plot to: {outdir / fname}")
+
+        if args.save_matrix:
+            matrix_path = outdir / "metaprofile_matrix.npz"
+            matrix_names = ranked[:args.save_matrix]
+            save_counts_matrix(matrix_path, protein_sources, matrix_names, rank, stats, binf_keys, windows_bed,
+                               binf_index, args.window, n_binf, args.central_window)
+            print(f"Wrote raw counts of the top {len(matrix_names)} samples to: {matrix_path} "
+                  f"({matrix_path.stat().st_size / 1e6:.1f} MB)")
 
         # ---- 4. the one combined table ----
         table_path = outdir / "sample_summary.tsv"

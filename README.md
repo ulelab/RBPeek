@@ -33,6 +33,8 @@ and `bedtools`. The split and build scripts are also compatible with Python 3.6.
 |---|---|
 | `sample_summary.tsv` | one row per panel sample, sorted by rank ([columns](#sample_summarytsv)) |
 | `metaprofile.pdf` | mean log-transformed, depth-normalised support as a function of offset across ±`--window`, for the 10 highest-ranked selected samples |
+| `metaprofile_maxpeak.pdf`, `metaprofile_windowfrac.pdf` | shape-only views of the same samples (Method 4) |
+| `metaprofile_matrix.npz` | raw per-locus, per-offset support of the top-ranked samples (`--save-matrix`) |
 | `binf_support_heatmap.pdf` | loci × selected samples; each cell is the strongest central peak. The title gives the BED name, the selection and the locus count |
 | `binf_summary_tsne.png` | tSNE embedding of the heatmap loci (`--tsne`) |
 | `binf_heatmap_clusters.tsv`, `metaprofile_cluster_C*.pdf` | k-means clusters of the heatmap loci and one metaprofile per cluster (`-n`) |
@@ -52,6 +54,7 @@ and `bedtools`. The split and build scripts are also compatible with Python 3.6.
 | `--support-pct` | 30 | percentage of top-ranked samples passed to the heatmap, tSNE and clustering (the THRAP3 runner uses 20) |
 | `--gaussian-sigma` | 2 | standard deviation (nt) of the metaprofile smoothing kernel |
 | `--heatmap-scale-percentile` | 99 | percentile of non-zero cells mapped to the top of the colour scale |
+| `--save-matrix [N]` | off (N = 10) | write the raw counts of the N top-ranked samples to `metaprofile_matrix.npz` |
 | `-n/--n-clusters` | off | number of k-means clusters of the heatmap loci (presence/absence) |
 | `--tsne`, `--tsne-perplexity` | off, 30 | tSNE of the heatmap loci |
 
@@ -93,6 +96,17 @@ panel files.
      its height, whereas the ranking rewards binding many loci. Red dotted lines mark
      ±central-window, the legend gives each sample's rank and score, and the title names the
      inference BED (and therefore the region). The plot area is square with 12 pt text.
+   - Two shape-only views are also written. Both give every curve the same overall size, so
+     height carries no information about rank; they compare how sharply binding is centred.
+     - **maxpeak**: the metaprofile curve divided by its own maximum.
+     - **windowfrac**: each locus's profile is divided by its own total over ±`--window`, then
+       averaged over the loci the sample binds. Every bound locus counts equally, and depth and
+       `region_cdna` cancel. The dashed line marks no positional preference (1 / window width).
+   - `--save-matrix` stores the raw counts (no normalisation, no log) as sparse triplets, so
+     normalisations can be tried without rerunning:
+     `meta, counts = load_counts_matrix("metaprofile_matrix.npz")` (in
+     `intersect_inference_bed.py`) returns the sample names, ranks, `central_binding`,
+     `region_cdna`, offsets and locus names, and one loci × offsets array per sample.
    - Heatmap values are scaled by 10⁶ / `region_cdna`.
    - Each heatmap cell is the sample's **strongest central peak** at that locus: the cDNA inside
      ±central-window of the peak contributing the most cDNA there. The ranking, in contrast,
