@@ -119,13 +119,13 @@ Columns of `sample_summary.tsv`:
 
 ## THRAP3 data
 
-The inference loci derive from four HEK293 HA-THRAP3 iCLIP replicates (GRCh38), whose Clippy
-peak calls are stored in `THRAP3/raw/`. `build_thrap3_inference_bed.py` converts chromosome
+The inference loci derive from four HEK293 HA-THRAP3 iCLIP replicates (GRCh38). Crosslink sites
+were derived from read 1 of each pair, and the Clippy peak calls are stored in `THRAP3/raw/`. `build_thrap3_inference_bed.py` converts chromosome
 names to UCSC style, merges overlapping peaks across replicates on each strand, retains regions
 supported by at least two of the four replicates, and reduces each region to its 1 nt midpoint.
-This yields 29,018 loci (`THRAP3_merged_min2rep_anchors.bed`; the score column records
-replicate support). After removal of mitochondrial loci, 19,917 loci are exonic and 8,666 are
-intronic.
+This yields 26,030 loci (`THRAP3_merged_min2rep_anchors.bed`; the score column records
+replicate support), of which 216 are mitochondrial and are removed before the loci are
+partitioned into exonic and intronic sets.
 
 The panel (`THRAP3/RBPeekSamplesheet_eCLIP.tsv`) comprises 224 HepG2 and K562 eCLIP samples;
 `RBPeekSamplesheet.tsv` additionally lists the iCLIP and PAR-CLIP samples. Panel entries under
