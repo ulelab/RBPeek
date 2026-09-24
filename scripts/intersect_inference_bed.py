@@ -74,6 +74,9 @@ def parse_args():
     p.add_argument("--support-pct", type=float, default=30.0,
                    help="Percentage of top-ranked samples shown in the heatmap and tSNE (default: 30); "
                         f"the metaprofile shows the first {METAPROFILE_MAX} of them")
+    p.add_argument("--highlight", nargs="+", metavar="SAMPLE", default=[],
+                   help="Sample labels (or case-insensitive substrings of them) to draw in black on the "
+                        "metaprofile in addition to the top-ranked samples")
     p.add_argument("--heatmap-scale-percentile", type=float, default=99.0,
                    help="Percentile of non-zero heatmap values mapped to the top of the colour scale (default: 99)")
     p.add_argument("--tsne", action="store_true", help="Write a tSNE embedding of the heatmap loci")
@@ -487,8 +490,23 @@ def log_mean_curve(counts, scale):
     return np.log1p(counts.astype(np.float64) * scale).mean(axis=0)
 
 
-def render_metaprofile(offsets, profiles, order, legend, window, out_path, title, central_window) -> None:
-    """Draw the metaprofile: square plot area, 12 pt text, legend to the right."""
+def match_highlights(patterns, samples):
+    """Samples whose label equals, or contains (case-insensitively), any of the patterns."""
+    matched = []
+    for pat in patterns:
+        hits = [pn for pn in samples if pn == pat] or [pn for pn in samples if pat.lower() in pn.lower()]
+        if not hits:
+            print(f"WARNING: --highlight {pat!r} matches no sample")
+        matched.extend(pn for pn in hits if pn not in matched)
+    return matched
+
+
+def render_metaprofile(offsets, profiles, order, legend, window, out_path, title, central_window,
+                       highlight=()) -> None:
+    """
+    Draw the metaprofile: square plot area, 12 pt text, legend to the right. Samples in
+    `highlight` are drawn in black with a heavier line; the others follow the colour cycle.
+    """
     with plt.rc_context({"font.size": 12, "axes.titlesize": 12, "axes.labelsize": 12,
                          "xtick.labelsize": 12, "ytick.labelsize": 12, "legend.fontsize": 12}):
         fig = plt.figure(figsize=(15.0, 8.6))
@@ -498,10 +516,17 @@ def render_metaprofile(offsets, profiles, order, legend, window, out_path, title
         # The colour cycle has 10 entries; the line style changes each time it repeats.
         palette = plt.rcParams["axes.prop_cycle"].by_key()["color"]
         linestyles = ["-", "--", ":", "-."]
-        for i, pn in enumerate(order):
+        i = n_hl = 0
+        for pn in order:
+            if pn in highlight:
+                ax.plot(offsets, profiles[pn], label=f"{pn}  ({legend[pn]})", color="black",
+                        linestyle=linestyles[n_hl % len(linestyles)], linewidth=3, zorder=3)
+                n_hl += 1
+                continue
             ax.plot(offsets, profiles[pn], label=f"{pn}  ({legend[pn]})",
                     color=palette[i % len(palette)],
                     linestyle=linestyles[(i // len(palette)) % len(linestyles)], linewidth=2)
+            i += 1
         ax.axvline(0, color="black", linewidth=1, alpha=0.4)
         # Limits of the central window used for ranking.
         for edge in (-central_window, central_window):
@@ -657,14 +682,24 @@ def main():
 
         # 3. Metaprofile.
         meta_set = selected[:METAPROFILE_MAX]
+        highlight = []
+        for pn in match_highlights(args.highlight, list(stats)):
+            if stats[pn]["region_cdna"] <= 0:
+                print(f"WARNING: --highlight {pn} has no region cDNA and is not plotted")
+                continue
+            highlight.append(pn)
+            if pn not in meta_set:
+                meta_set.append(pn)
         legend = {pn: f"rank {rank[pn]}, central binding {stats[pn]['central']:.3f}" for pn in meta_set}
+        n_top = len([pn for pn in meta_set if pn in selected[:METAPROFILE_MAX]])
+        title = (f"{binf_path.stem}\ntop {n_top} of {len(ranked)} samples by central binding "
+                 f"(±{args.central_window} nt, red dotted lines)")
+        if highlight:
+            title += f" + {len(highlight)} highlighted"
+        title += f"   |   n = {n_binf:,} loci"
         meta_path = outdir / "metaprofile.pdf"
-        render_metaprofile(
-            offsets, profiles, meta_set, legend, args.window, meta_path,
-            f"{binf_path.stem}\ntop {len(meta_set)} of {len(ranked)} samples by central binding "
-            f"(±{args.central_window} nt, red dotted lines)   |   n = {n_binf:,} loci",
-            args.central_window,
-        )
+        render_metaprofile(offsets, profiles, meta_set, legend, args.window, meta_path, title,
+                           args.central_window, highlight=set(highlight))
         print(f"Wrote metaprofile plot to: {meta_path}")
 
         # 4. Sample summary table.

@@ -19,6 +19,7 @@
 #   PANEL_DIR  directory against which the samplesheet paths are resolved
 #   GENOME     chromosome sizes file
 #   CONDA_SH   conda initialisation script
+#   HIGHLIGHT  sample labels (or substrings) to highlight on the metaprofile, e.g. "BCLAF1"
 
 set -euo pipefail
 
@@ -31,6 +32,7 @@ fi
 PANEL_DIR="${PANEL_DIR:-../CLIP}"
 GENOME="${GENOME:-/camp/home/jonesm6/home/shared/genomes/hg38/hg38.genome}"
 CONDA_SH="${CONDA_SH:-/camp/home/jonesm6/home/users/jonesm6/software/miniconda3/etc/profile.d/conda.sh}"
+HIGHLIGHT="${HIGHLIGHT:-}"
 
 cd "${SLURM_SUBMIT_DIR:-.}"
 
@@ -62,4 +64,5 @@ python3 scripts/intersect_inference_bed.py \
   --window 100 \
   --central-window 10 \
   --support-pct 20 \
-  --tsne
+  --tsne \
+  ${HIGHLIGHT:+--highlight $HIGHLIGHT}
