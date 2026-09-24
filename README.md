@@ -43,7 +43,7 @@ other scripts require only Python ≥ 3.6 and `bedtools`.
 | `-x/--xldir` | required | directory against which the samplesheet's `file` paths are resolved |
 | `-s/--samplesheet` | required | TSV with columns `file` and `group` (sample label) |
 | `-b/--bed` | required | inference BED6+, strand in column 6; each locus is anchored at `(start + end) // 2` |
-| `--norm-bed` | required | BED6 of the regions over which each sample's normalising cDNA is summed (`regions_exonic.bed` for exonic loci, `regions_intronic.bed` for intronic loci) |
+| `--norm-bed` | primary chromosomes of `--genome`, both strands | BED6 of the regions over which each sample's normalising cDNA is summed (`regions_exonic.bed` for exonic loci, `regions_intronic.bed` for intronic loci) |
 | `--genome` | required | chromosome sizes file for `bedtools slop` |
 | `-o/--outdir` | `results` | output directory |
 | `--window` | 100 | half-width (nt) of the window around each locus |
@@ -64,7 +64,7 @@ the panel files.
    strand-aligned, with positive values downstream of the locus. This yields, for each sample,
    a locus × offset support matrix *c*(*l*, *o*).
 2. **Normalisation.** `region_cdna` is the cDNA of the sample's peaks within `--norm-bed` on
-   the same strand. Each peak is weighted by the fraction of its width inside the regions,
+   the same strand (by default, the primary chromosomes of `--genome` on both strands). Each peak is weighted by the fraction of its width inside the regions,
    overlapping regions are merged beforehand, and mitochondrial peaks are excluded because
    mitochondrial rRNA is a major source of background in eCLIP libraries. Normalised support
    is *x*(*l*, *o*) = *c*(*l*, *o*) × 10⁶ / `region_cdna`.
@@ -152,12 +152,8 @@ anchors are the midpoints of the pooled experimental peaks that lie within retai
 python3 scripts/build_centrosome_inference_bed.py --deseq <DESeq2 table.xlsx> -g <annotation.gtf>
 ```
 
-Because the loci are not partitioned by region, the normalisation BED for
-`intersect_inference_bed.py` covers the whole genome on both strands:
-
-```bash
-awk -v OFS='\t' '$1 ~ /^chr([0-9]+|X|Y)$/ {print $1,0,$2,".",".","+"; print $1,0,$2,".",".","-"}' <chromosome sizes> > Centrosome/regions_genome.bed
-```
+Because the loci are not partitioned by region, `intersect_inference_bed.py` is run without
+`--norm-bed`, so that each sample is normalised by its peak cDNA on the primary chromosomes.
 
 ## Scripts
 

@@ -9,7 +9,8 @@ Method
      nucleotides it covers. Offsets are strand-aligned, with positive values downstream.
   2. Normalisation. region_cdna is the cDNA of a sample's peaks inside --norm-bed, with each
      peak weighted by the fraction of its width inside the regions and mitochondrial peaks
-     excluded. Support is expressed per million region cDNA.
+     excluded. Without --norm-bed the regions are the primary chromosomes of --genome on both
+     strands. Support is expressed per million region cDNA.
   3. Metaprofile and ranking. For each sample, m(o) is the mean over all loci of
      log1p(normalised support) at offset o. central_binding is the area under m(o) within
      +/- --central-window nt. Samples are ranked by central_binding and the top --support-pct
@@ -59,9 +60,10 @@ def parse_args():
                    help="Inference BED (BED6+, strand in column 6); each locus is anchored at its midpoint")
     p.add_argument("-s", "--samplesheet", required=True,
                    help="TSV with columns 'file' (relative to --xldir) and 'group' (sample label)")
-    p.add_argument("--norm-bed", required=True,
+    p.add_argument("--norm-bed", default=None,
                    help="BED6 of the regions over which each sample's normalising cDNA is summed, "
-                        "e.g. exons for exonic loci (written by split_inference_bed_by_region.py)")
+                        "e.g. exons for exonic loci (written by split_inference_bed_by_region.py). "
+                        "Default: the primary chromosomes (1-22, X, Y) of --genome on both strands")
     p.add_argument("--genome", required=True, help="Chromosome sizes file for bedtools slop")
     p.add_argument("-o", "--outdir", default="results", help="Output directory (default: results)")
     p.add_argument("--window", type=int, default=100,
@@ -355,6 +357,30 @@ def merge_regions(bed: Path, tmpdir: Path) -> Path:
     return merged
 
 
+def genome_regions_bed(genome: Path, chr_style: bool | None, tmpdir: Path) -> Path:
+    """
+    Whole-genome normalisation regions: each primary chromosome of the sizes file on both
+    strands, named in the inference BED's style (chr-prefixed unless chr_style is False).
+    """
+    out = tmpdir / "regions_genome.bed"
+    n = 0
+    with open(genome, encoding="utf-8") as fin, open(out, "w", encoding="utf-8") as fout:
+        for line in fin:
+            if not _is_data(line):
+                continue
+            name, size = line.split()[:2]
+            bare = name[3:] if name.startswith("chr") else name
+            if not _PRIMARY_RE.match(bare) or bare in ("M", "MT"):
+                continue
+            name = bare if chr_style is False else "chr" + bare
+            for strand in ("+", "-"):
+                fout.write(f"{name}\t0\t{size}\t.\t.\t{strand}\n")
+            n += 1
+    if n == 0:
+        raise ValueError(f"no primary chromosomes found in the genome sizes file: {genome}")
+    return out
+
+
 def region_cdna(panel_bed: Path, norm_bed: Path, tmpdir: Path) -> float:
     """
     cDNA of a sample's peaks inside norm_bed on the same strand, excluding mitochondrial peaks.
@@ -533,17 +559,19 @@ def main():
 
     xldir = Path(args.xldir)
     binf_path = Path(args.bed)
-    norm_bed = Path(args.norm_bed)
+    norm_bed = Path(args.norm_bed) if args.norm_bed else None
     for label, p in [("--xldir", xldir), ("Inference BED", binf_path),
                      ("--norm-bed", norm_bed), ("Genome sizes file", Path(args.genome))]:
-        if not p.exists():
+        if p is not None and not p.exists():
             raise FileNotFoundError(f"{label} not found: {p}")
-    binf_style, norm_style = _chrom_style(binf_path), _chrom_style(norm_bed)
-    if binf_style is not None and norm_style is not None and binf_style != norm_style:
-        raise ValueError(
-            f"--norm-bed uses {'chr-prefixed' if norm_style else 'Ensembl'} chromosome names but "
-            "the inference BED does not; region_cdna would be zero for every sample."
-        )
+    binf_style = _chrom_style(binf_path)
+    if norm_bed is not None:
+        norm_style = _chrom_style(norm_bed)
+        if binf_style is not None and norm_style is not None and binf_style != norm_style:
+            raise ValueError(
+                f"--norm-bed uses {'chr-prefixed' if norm_style else 'Ensembl'} chromosome names but "
+                "the inference BED does not; region_cdna would be zero for every sample."
+            )
 
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -551,6 +579,9 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix="intersect_binf_") as tmp:
         tmpdir = Path(tmp)
+        if norm_bed is None:
+            norm_bed = genome_regions_bed(Path(args.genome), binf_style, tmpdir)
+            print("No --norm-bed given: normalising by peak cDNA on the primary chromosomes of --genome")
         norm_merged = merge_regions(norm_bed, tmpdir)
         binf_keys, binf_index, windows_bed, n_chrm = load_binf_and_prepare_windows(
             binf_path, args.window, args.genome, tmpdir
