@@ -132,18 +132,26 @@ def uniquify_names(named_paths: list[tuple[str, Path]]) -> list[tuple[str, Path]
     return out
 
 
+_PRIMARY_RE = re.compile(r"^([0-9]+|X|Y|M|MT)$")
+
+
 def _chrom_style(path: Path, sample: int = 2000):
     """
     Return True if the BED uses chr-prefixed names, False for Ensembl-style names, and None if
-    it has no records. The decision is a majority vote over the first `sample` records, because
-    scaffold names sort before "chr" and a single leading record can be unrepresentative.
+    it has no records. The decision is a majority vote over the first `sample` records on
+    primary chromosomes (1-22, X, Y, M); scaffolds are ignored because their names carry no
+    prefix in either convention and can outnumber the chromosomes.
     """
     n_chr = n_other = 0
     with _open_text_auto(path) as fh:
         for line in fh:
             if not _is_data(line):
                 continue
-            if line.split("\t")[0].startswith("chr"):
+            name = line.split("\t")[0]
+            has_chr = name.startswith("chr")
+            if not _PRIMARY_RE.match(name[3:] if has_chr else name):
+                continue
+            if has_chr:
                 n_chr += 1
             else:
                 n_other += 1
