@@ -137,6 +137,28 @@ absolute values. `central_binding` increases with the fraction of loci at which 
 signal, and the number of peaks called depends on library depth, so normalisation by
 `region_cdna` does not remove the influence of depth entirely.
 
+## Centrosome data
+
+`build_centrosome_inference_bed.py` builds inference loci for proximity-CLIP (APEX) data, in
+which peak cDNA reflects the proportion of a transcript in the labelled compartment rather
+than a discrete binding site. Peak cDNA is assigned to gene bodies (each peak weighted by the
+fraction of its width inside the gene, same strand) and expressed per million of the sample's
+non-mitochondrial peak cDNA. Genes are retained if they pass the differential-expression
+filter (`log2FoldChange > 1`, `pvalue <= 0.05`) and the ratio of the experimental to the
+control group mean, with a pseudocount of 1 per million added to both, is at least 2. The
+anchors are the midpoints of the pooled experimental peaks that lie within retained genes.
+
+```bash
+python3 scripts/build_centrosome_inference_bed.py --deseq <DESeq2 table.xlsx> -g <annotation.gtf>
+```
+
+Because the loci are not partitioned by region, the normalisation BED for
+`intersect_inference_bed.py` covers the whole genome on both strands:
+
+```bash
+awk -v OFS='\t' '$1 ~ /^chr([0-9]+|X|Y)$/ {print $1,0,$2,".",".","+"; print $1,0,$2,".",".","-"}' <chromosome sizes> > Centrosome/regions_genome.bed
+```
+
 ## Scripts
 
 | script | purpose |
@@ -144,5 +166,6 @@ signal, and the number of peaks called depends on library depth, so normalisatio
 | `intersect_inference_bed.py` | the analysis described above |
 | `split_inference_bed_by_region.py` | exonic and intronic locus sets (strand-aware, exons given priority) and the corresponding normalisation regions; `--drop-chrM` removes mitochondrial loci |
 | `build_thrap3_inference_bed.py` | replicate THRAP3 peak calls → inference BED |
+| `build_centrosome_inference_bed.py` | proximity-CLIP peak calls and differential-expression table → inference BED of enriched genes |
 | `merge_replicate_peaks.py` | pools replicate peak BEDs by summing scores at identical intervals |
 | `run_thrap3_region.sbatch` | SLURM job for one region of the THRAP3 analysis |
